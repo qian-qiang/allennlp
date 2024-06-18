@@ -1,3 +1,4 @@
+#使用 python setup.py sdist 或其他相关命令时，setuptools 将会根据 MANIFEST.in 文件指定的规则来打包项目
 include LICENSE
 include README.md
 recursive-include allennlp *

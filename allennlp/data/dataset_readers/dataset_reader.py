@@ -14,45 +14,44 @@ from allennlp.common.registrable import Registrable
 
 logger = logging.getLogger(__name__)
 
+"""这段代码定义了一个 DatasetReader 类及相关的辅助类，用于处理数据集的读取、分片（sharding）和分布式训练环境下的数据处理"""
 
 @dataclass
 class WorkerInfo:
     """
-    Contains information about the worker context when a `DatasetReader`
-    is being used within a multi-process `DataLoader`.
+    当 `DatasetReader` 在多进程 `DataLoader` 中使用时，包含有关工作线程上下文的信息。
 
-    From a `DatasetReader` this can accessed with the [`get_worker_info()`](#get_worker_info) method.
+    可以通过 `DatasetReader` 中的 [`get_worker_info()`](#get_worker_info) 方法来访问这些信息。
     """
 
     num_workers: int
     """
-    The total number of workers.
+    工作线程的总数量。
     """
 
     id: int
     """
-    The 0-indexed ID of the current worker.
+    当前工作线程的从0开始的ID。
     """
 
 
 @dataclass
 class DistributedInfo:
     """
-    Contains information about the global process rank and total world size when the reader is being
-    used within distributed training.
+    当读取器在分布式训练中使用时，包含关于全局进程等级和总体世界大小的信息。
 
-    From a `DatasetReader` this can be accessed with the [`get_distributed_info()`](#get_distributed_info) method.
+    可以通过 [`get_distributed_info()`](#get_distributed_info) 方法从 `DatasetReader` 中访问这些信息。
     """
 
     world_size: int
     """
-    The total number of processes in the distributed group.
+    分布式组中进程的总数。
     """
 
     global_rank: int
     """
-    The 0-indexed ID of the current process within the distributed group.
-    This will be between 0 and `world_size - 1`, inclusive.
+    当前进程在分布式组中的0索引ID。
+    这将在0到 `world_size - 1`（含）之间。
     """
 
 
@@ -61,106 +60,84 @@ _T = TypeVar("_T")
 PathOrStr = Union[PathLike, str]
 DatasetReaderInput = Union[PathOrStr, List[PathOrStr], Dict[str, PathOrStr]]
 
-
 class DatasetReader(Registrable):
     """
-    A `DatasetReader` knows how to turn a file containing a dataset into a collection
-    of `Instance`s.  To implement your own, just override the [`_read(file_path)`](#_read) method
-    to return an `Iterable` of the instances. Ideally this should be a lazy generator
-    that yields them one at a time.
+    `DatasetReader` 知道如何将包含数据集的文件转换为一组 `Instance`。要实现自己的 `DatasetReader`，
+    只需覆盖 [`_read(file_path)`](#_read) 方法以返回一个 `Instance` 的可迭代对象。
+    最好是一个惰性生成器，逐个生成实例。
 
-    All parameters necessary to `_read` the data apart from the filepath should be passed
-    to the constructor of the `DatasetReader`.
+    所有除文件路径外 `_read` 数据所需的参数应传递给 `DatasetReader` 的构造函数。
 
-    You should also implement [`text_to_instance(*inputs)`](#text_to_instance),
-    which should be used to turn raw data into `Instance`s. This method is required
-    in order to use a `Predictor` with your reader.
+    你还应该实现 [`text_to_instance(*inputs)`](#text_to_instance) 方法，
+    该方法用于将原始数据转换为 `Instance`。这个方法在使用 `Predictor` 与你的 reader 时是必需的。
 
-    Usually the `_read()` method is implemented to call `text_to_instance()`.
+    通常情况下，`_read()` 方法实现时会调用 `text_to_instance()`。
 
-    # Parameters
+    # 参数
 
-    max_instances : `int`, optional (default=`None`)
-        If given, will stop reading after this many instances. This is a useful setting for debugging.
-        Setting this disables caching.
+    max_instances: `int`，可选（默认=`None`）
+        如果指定，将在读取此数目的实例后停止。这对于调试很有用。
+        设置此参数会禁用缓存。
 
-    manual_distributed_sharding: `bool`, optional (default=`False`)
-        By default, when used in a distributed setting, `DatasetReader` makes sure that each
-        trainer process only receives a subset of the data. It does this by reading the whole
-        dataset in each worker, but filtering out the instances that are not needed.
+    manual_distributed_sharding: `bool`，可选（默认=`False`）
+        默认情况下，在分布式设置中使用时，`DatasetReader` 确保每个训练进程只接收数据的一个子集。
+        它通过在每个工作进程中读取整个数据集，但过滤掉不需要的实例来实现这一点。
 
-        While this ensures that each worker will recieve unique instances, it's not a very efficient
-        way to do so since each worker still needs to process every single instance.
+        虽然这确保了每个工作进程收到唯一的实例，但这种方法效率不高，
+        因为每个工作进程仍然需要处理数据集中的每个实例。
 
-        A better way to handle this is to manually handle the filtering within your `_read()`
-        method, in which case you should set `manual_distributed_sharding` to `True` so that
-        the base class knows that you handling the filtering.
+        更好的方式是在 `_read()` 方法内手动处理过滤，此时应将 `manual_distributed_sharding` 设置为 `True`，
+        以便基类知道你正在处理过滤。
 
-        See the section below about how to do this.
+        参见下面关于如何实现的部分。
 
-    manual_multiprocess_sharding : `bool`, optional (default=`False`)
-        This is similar to the `manual_distributed_sharding` parameter, but applies to
-        multi-process data loading. By default, when this reader is used by a multi-process
-        data loader (i.e. a `DataLoader` with `num_workers > 1`), each worker will
-        filter out all but a subset of the instances that are needed so that you
-        don't end up with duplicates.
+    manual_multiprocess_sharding: `bool`，可选（默认=`False`）
+        这与 `manual_distributed_sharding` 参数类似，但适用于多进程数据加载。
+        默认情况下，当此 reader 被多进程数据加载器使用（即具有 `num_workers > 1` 的 `DataLoader`）时，
+        每个工作进程会过滤掉除了需要的实例之外的所有实例，以避免重复。
 
-        However, there is really no benefit to using multiple workers in your `DataLoader`
-        unless you implement the sharding within your `_read()` method, in which
-        case you should set `manual_multiprocess_sharding` to `True`, just as with
-        `manual_distributed_sharding`.
+        但是，除非在 `_read()` 方法中实现分片，否则在你的 `DataLoader` 中使用多个工作进程没有实际好处。
+        因此，当你在 `_read()` 方法中处理了分片逻辑时，应设置 `manual_multiprocess_sharding` 为 `True`，
+        就像 `manual_distributed_sharding` 一样。
 
-        See the section below about how to do this.
+        参见下面关于如何实现的部分。
 
-    serialization_dir: `str`, optional (default=`None`)
-        The directory in which the training output is saved to, or the directory the model is loaded from.
+    serialization_dir: `str`，可选（默认=`None`）
+        保存训练输出的目录，或加载模型的目录。
 
-        !!! Note
-            This is typically not given an entry in a configuration file. It will be set automatically
-            when using the built-in `allennp` commands.
+        !!! 注意
+            这通常不会在配置文件中给出条目。在使用内置的 `allennlp` 命令时会自动设置。
 
-    # Using your reader with multi-process or distributed data loading
+    # 在多进程或分布式数据加载中使用你的 reader
 
-    There are two things you may need to update in your `DatasetReader` in order for
-    it to be efficient in the multi-process or distributed data loading context.
+    若要使你的 `DatasetReader` 在多进程或分布式数据加载上更高效，可能需要更新两个内容。
 
-    1. The `_read()` method should handle filtering out all but the instances that
-        each particular worker should generate.
+    1. `_read()` 方法应该处理仅生成每个特定工作进程所需的实例。
 
-        This is important because the default mechanism for filtering out `Instance`s in
-        the distributed or multi-process `DataLoader` setting is not very efficient, since every
-        worker would still need to process every single `Instance` in your dataset.
+        这很重要，因为在分布式或多进程 `DataLoader` 设置中，用于过滤 `Instance` 的默认机制效率不高，
+        因为每个工作进程仍然需要处理数据集中的每个单个 `Instance`。
 
-        But by manually handling the filtering / sharding within your `_read()` method, each
-        worker only needs to perform a subset of the work required to create instances.
+        但通过在 `_read()` 方法内手动处理过滤或分片，每个工作进程只需执行创建实例所需工作的子集。
 
-        For example, if you were training using 2 GPUs and your `_read()` method reads a file
-        line-by-line, creating one `Instance` for each line, you could just check the node
-        rank within `_read()` and then throw away every other line starting at the line number
-        corresponding to the node rank.
+        例如，如果你正在使用 2 个 GPU 进行训练，而 `_read()` 方法按行读取文件，每行创建一个 `Instance`，
+        你可以在 `_read()` 内部检查节点排名，然后从对应节点排名的行开始丢弃每一行的其他行。
 
-        The helper method [`shard_iterable()`](#shard_iterable) is there to make this easy for you.
-        You can wrap this around any iterable object in your `_read()` method, and it will
-        return an iterator that skips the right items based on the distributed training
-        or multi-process loading context. This method can always be called regardless
-        of whether or not you're actually using distributed training or multi-process loading.
+        辅助方法 [`shard_iterable()`](#shard_iterable) 使这一点变得更容易。
+        你可以在 `_read()` 方法中的任何可迭代对象周围包装它，并返回一个迭代器，根据分布式训练或多进程加载上下文跳过正确的项。
+        无论实际上是否在使用分布式训练或多进程加载，都可以调用此方法。
 
-        Remember though that when you handle the sharding manually within `_read()`, you need
-        to let the `DatasetReader` know about this so that it doesn't do any additional
-        filtering. Therefore you need to ensure that both `self.manual_distributed_sharding` and
-        `self.manual_multiprocess_sharding` are set to `True`.
+        但请记住，当在 `_read()` 内部手动处理分片时，需要让 `DatasetReader` 知道这一点，
+        以便它不执行任何额外的过滤。因此，你需要确保 `self.manual_distributed_sharding` 和
+        `self.manual_multiprocess_sharding` 都设置为 `True`。
 
-        If you call the helper method `shard_iterable()` without setting these to `True`,
-        you'll get an exception.
+        如果在不设置这些为 `True` 的情况下调用辅助方法 `shard_iterable()`，会引发异常。
 
-    2. If the instances generated by `_read()` contain `TextField`s, those `TextField`s
-        should not have any token indexers assigned. The token indexers need to be applied
-        in the [`apply_token_indexers()`](#apply_token_indexers) method instead.
+    2. 如果 `_read()` 生成的 `Instance` 包含 `TextField`，那么这些 `TextField` 不应该分配任何 token indexers。
+        Token indexers 应该在 [`apply_token_indexers()`](#apply_token_indexers) 方法中应用。
 
-        This is highly recommended because if the instances generated by your `_read()` method
-        have token indexers attached, those indexers will be duplicated when they are sent across
-        processes. If your token indexers contain large objects (such as `PretrainedTransformerTokenIndexer`s)
-        this could take up a massive amount of memory.
+        强烈建议这样做，因为如果 `_read()` 方法生成的实例附带了 token indexers，那么当它们在进程间传递时，
+        这些 indexers 将被复制。如果你的 token indexers 包含大对象（如 `PretrainedTransformerTokenIndexer`），
+        这可能会占用大量内存。
 
     """
 
@@ -181,68 +158,62 @@ class DatasetReader(Registrable):
         self.serialization_dir = serialization_dir
         self._worker_info: Optional[WorkerInfo] = None
         self._distributed_info: Optional[DistributedInfo] = None
-        # If we're actually in the main process, we can find the info using torch utils.
+
+        # 如果我们实际处于主进程中，可以使用torch工具找到信息
         if util.is_distributed():
             self._distributed_info = DistributedInfo(dist.get_world_size(), dist.get_rank())
 
     def read(self, file_path: DatasetReaderInput) -> Iterator[Instance]:
         """
-        Returns an iterator of instances that can be read from the file path.
+        返回一个实例的迭代器，这些实例可以从文件路径中读取。
         """
         for instance in self._multi_worker_islice(self._read(file_path)):  # type: ignore
             if self._worker_info is None:
-                # If not running in a subprocess, it's safe to apply the token_indexers right away.
+                # 如果不是在子进程中运行，则可以立即应用token_indexers。
                 self.apply_token_indexers(instance)
             yield instance
 
     def _read(self, file_path) -> Iterable[Instance]:
         """
-        Reads the instances from the given `file_path` and returns them as an
-        `Iterable`.
+        从给定的 `file_path` 中读取实例并将它们作为 `Iterable` 返回。
 
-        You are strongly encouraged to use a generator so that users can
-        read a dataset in a lazy way, if they so choose.
+        强烈建议使用生成器，以便用户可以选择懒惰地读取数据集。
         """
-        # NOTE: `file_path` is left untyped here on purpose.
-        # Technically the type should be `DatasetReaderInput`, but many subclass
-        # implementations of `DatasetReader` define their `_read()` method to take a more
-        # specific type, such as just `str`. But that would be a type error
-        # according to mypy: https://mypy.readthedocs.io/en/stable/common_issues.html#incompatible-overrides
+        # 注意：这里故意不对 `file_path` 进行类型标注。
+        # 从技术上讲，类型应该是 `DatasetReaderInput`，但是许多 `DatasetReader` 的子类
+        # 定义它们的 `_read()` 方法来接受更具体的类型，比如只是 `str`。但是这样做会导致
+        # 类型错误，详见：https://mypy.readthedocs.io/en/stable/common_issues.html#incompatible-overrides
         raise NotImplementedError
 
     def text_to_instance(self, *inputs) -> Instance:
         """
-        Does whatever tokenization or processing is necessary to go from textual input to an
-        `Instance`.  The primary intended use for this is with a
-        :class:`~allennlp.predictors.predictor.Predictor`, which gets text input as a JSON
-        object and needs to process it to be input to a model.
+        将文本输入转换为 `Instance` 实例所需的任何标记化或处理操作。这主要用于
+        :class:`~allennlp.predictors.predictor.Predictor`，它将文本输入作为 JSON
+        对象并需要处理它以输入模型。
 
-        The intent here is to share code between :func:`_read` and what happens at
-        model serving time, or any other time you want to make a prediction from new data.  We need
-        to process the data in the same way it was done at training time.  Allowing the
-        `DatasetReader` to process new text lets us accomplish this, as we can just call
-        `DatasetReader.text_to_instance` when serving predictions.
+        在这里的意图是在 :func:`_read` 和模型服务时共享代码，或者任何需要从新数据进行预测的时候。
+        我们需要以与训练时相同的方式处理数据。允许 `DatasetReader` 处理新文本让我们能够实现这一点，
+        因为我们可以在提供预测时调用 `DatasetReader.text_to_instance`。
 
-        The input type here is rather vaguely specified, unfortunately.  The `Predictor` will
-        have to make some assumptions about the kind of `DatasetReader` that it's using, in order
-        to pass it the right information.
+        不幸的是，这里的输入类型描述相当模糊。`Predictor` 将不得不对其使用的 `DatasetReader` 类型
+        做一些假设，以便向其传递正确的信息。
         """
         raise NotImplementedError
 
     def apply_token_indexers(self, instance: Instance) -> None:
         """
-        If `Instance`s created by this reader contain `TextField`s without `token_indexers`,
-        this method can be overriden to set the `token_indexers` of those fields.
+        如果由该读取器创建的 `Instance` 包含没有 `token_indexers` 的 `TextField`，
+        则可以重写此方法来设置那些字段的 `token_indexers`。
 
-        E.g. if you have you have `"source"` `TextField`, you could implement this method like this:
+        例如，如果您有名为 `"source"` 的 `TextField`，您可以像这样实现此方法：
 
         ```python
         def apply_token_indexers(self, instance: Instance) -> None:
             instance["source"].token_indexers = self._token_indexers
         ```
 
-        If your `TextField`s are wrapped in a `ListField`, you can access them via `field_list`.
-        E.g. if you had a `"source"` field of `ListField[TextField]` objects, you could:
+        如果您的 `TextField` 包装在 `ListField` 中，您可以通过 `field_list` 访问它们。
+        例如，如果您有一个 `"source"` 字段包含 `ListField[TextField]` 对象，您可以：
 
         ```python
         for text_field in instance["source"].field_list:
@@ -253,54 +224,47 @@ class DatasetReader(Registrable):
 
     def get_worker_info(self) -> Optional[WorkerInfo]:
         """
-        Provides a [`WorkerInfo`](#WorkerInfo) object when the reader is being used within a
-        worker of a multi-process `DataLoader`.
+        当 `DatasetReader` 在多进程 `DataLoader` 的工作器中使用时，提供一个 [`WorkerInfo`](#WorkerInfo) 对象。
 
-        If the reader is in the main process, this is just `None`.
+        如果读取器在主进程中，则返回 `None`。
 
-        !!! NOTE
-            This is different than distributed training. If the `DatasetReader`
-            is being used within distributed training, `get_worker_info()` will only
-            provide information on the `DataLoader` worker within its node.
+        !!! 注意
+            这与分布式训练不同。如果 `DatasetReader` 在分布式训练中使用，`get_worker_info()` 只会提供
+            关于其节点内的 `DataLoader` 工作器的信息。
 
-            Use [`get_distributed_info`](#get_distributed_info) to get information on distributed
-            training context.
-
+            使用 [`get_distributed_info`](#get_distributed_info) 获取分布式训练上下文的信息。
         """
         return self._worker_info
 
     def get_distributed_info(self) -> Optional[DistributedInfo]:
         """
-        Provides a [`DistributedInfo`](#DistributedInfo) object when the reader is being
-        used within distributed training.
+        当读取器在分布式训练中使用时，提供一个 [`DistributedInfo`](#DistributedInfo) 对象。
 
-        If not in distributed training, this is just `None`.
+        如果不在分布式训练中，则返回 `None`。
         """
         return self._distributed_info
 
     def _set_worker_info(self, info: Optional[WorkerInfo]) -> None:
         """
-        Should only be used internally.
+        仅在内部使用。
         """
         self._worker_info = info
 
     def _set_distributed_info(self, info: Optional[DistributedInfo]) -> None:
         """
-        Should only be used internally.
+        仅在内部使用。
         """
         self._distributed_info = info
 
     def shard_iterable(self, iterable: Iterable[_T]) -> Iterator[_T]:
         """
-        Helper method that determines which items in an iterable object to skip based
-        on the current node rank (for distributed training) and worker ID (for multi-process data loading).
+        辅助方法，根据当前节点排名（用于分布式训练）和工作器 ID（用于多进程数据加载），确定要跳过的可迭代对象中的项。
         """
         if not self.manual_distributed_sharding or not self.manual_multiprocess_sharding:
             raise ValueError(
-                "self.shard_iterable() was called but self.manual_distributed_sharding and "
-                "self.manual_multiprocess_sharding was not set to True. Did you forget to call "
-                "super().__init__(manual_distributed_sharding=True, manual_multiprocess_sharding=True) "
-                "in your constructor?"
+                "self.shard_iterable() 被调用，但 self.manual_distributed_sharding 和 "
+                "self.manual_multiprocess_sharding 未设置为 True。您是否忘记在构造函数中调用 "
+                "super().__init__(manual_distributed_sharding=True, manual_multiprocess_sharding=True)？"
             )
 
         sharded_slice: Iterator[_T] = iter(iterable)
@@ -315,9 +279,8 @@ class DatasetReader(Registrable):
                 sharded_slice, self._worker_info.id, None, self._worker_info.num_workers
             )
 
-        # We don't know for sure how many instances we have to produce.
-        # _multi_worker_islice() figures that out. But we know for sure
-        # it won't be more than max_instances.
+        # 我们无法确定需要生成多少个实例。
+        # _multi_worker_islice() 负责计算这一点。但我们确切地知道它不会超过 max_instances。
         if self.max_instances is not None:
             sharded_slice = itertools.islice(sharded_slice, self.max_instances)
 
@@ -328,27 +291,29 @@ class DatasetReader(Registrable):
         iterable: Iterable[_T],
     ) -> Iterator[_T]:
         """
-        This is just like `shard_iterable` but is for internal use only.
+        这个方法与 `shard_iterable` 类似，但仅供内部使用。
 
-        It has some additional logic to handle `max_instances` based on the distributed
-        or multi-process context, and whether or not sharding is handled manually
-        in the `_read()` method.
+        它具有一些额外的逻辑，用于根据分布式或多进程上下文以及是否在 `_read()` 方法中手动处理分片来处理 `max_instances`。
+
+        参数:
+            iterable (Iterable[_T]): 要分片的可迭代对象。
+
+        返回:
+            Iterator[_T]: 分片后的迭代器。
         """
-        # This has some complicated logic because any given reader may or may not
-        # implement manual multi-process and manual distributed sharding itself.
-        # We have to handle all possibilities.
+        # 这里有些复杂的逻辑，因为任何给定的读取器可能实现了或未实现多进程和分布式分片。
+        # 我们必须处理所有可能性。
 
         sharded_slice: Iterator[_T] = iter(iterable)
 
-        # We'll adjust max_instances as we go, depending on what sort of sharding is done.
-        # At the end, we want to ensure the total number of instances collected across
-        # all workers processes is equal to self.max_instances.
+        # 随着处理的进行，我们将根据进行的分片方式调整 max_instances。
+        # 最后，我们希望确保在所有工作器进程收集的实例总数等于 self.max_instances。
         max_instances = self.max_instances
 
         if self._distributed_info is not None:
             if max_instances is not None:
-                # Need to scale down max_instances because otherwise each node would read self.max_instances,
-                # but we really want self.max_instances total across all nodes.
+                # 需要缩减 max_instances，因为否则每个节点都会读取 self.max_instances，
+                # 但我们实际上希望在所有节点上总共读取 self.max_instances。
                 if self._distributed_info.global_rank < (
                     max_instances % self._distributed_info.world_size
                 ):
@@ -366,7 +331,7 @@ class DatasetReader(Registrable):
 
         if self._worker_info is not None:
             if max_instances is not None:
-                # Like in the distributed case above, we need to adjust max_instances.
+                # 类似于上面的分布式情况，我们需要调整 max_instances。
                 if self._worker_info.id < (max_instances % self._worker_info.num_workers):
                     max_instances = max_instances // self._worker_info.num_workers + 1
                 else:
@@ -374,12 +339,9 @@ class DatasetReader(Registrable):
 
             if not self.manual_multiprocess_sharding:
                 warnings.warn(
-                    "Using multi-process data loading without setting "
-                    "DatasetReader.manual_multiprocess_sharding to True.\n"
-                    "Did you forget to set this?\n"
-                    "If you're not handling the multi-process sharding logic within your "
-                    "_read() method, there is probably no benefit to using more than one "
-                    "worker.",
+                    "使用多进程数据加载，但未将 DatasetReader.manual_multiprocess_sharding 设置为 True。\n"
+                    "您是否忘记设置此选项？\n"
+                    "如果在您的 _read() 方法中未处理多进程分片逻辑，则使用多个工作器可能没有任何好处。",
                     UserWarning,
                 )
                 sharded_slice = itertools.islice(
@@ -390,3 +352,4 @@ class DatasetReader(Registrable):
             sharded_slice = itertools.islice(sharded_slice, max_instances)
 
         return sharded_slice
+

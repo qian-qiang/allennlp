@@ -1,189 +1,125 @@
-# Changelog
+# 更新日志
 
-All notable changes to this project will be documented in this file.
+此项目的所有显著变更将在此文件中记录。
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
+格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，
+并且本项目遵循 [语义化版本](https://semver.org/spec/v2.0.0.html)。
 
 ## [v2.10.1](https://github.com/allenai/allennlp/releases/tag/v2.10.1) - 2022-10-18
 
-### Fixed
+### 修复
 
-- Updated dependencies
-
+- 更新依赖项
 
 ## [v2.10.0](https://github.com/allenai/allennlp/releases/tag/v2.10.0) - 2022-07-14
 
-### Added
+### 添加
 
-- Added metric `FBetaVerboseMeasure` which extends `FBetaMeasure` to ensure compatibility with logging plugins and add some options.
-- Added three sample weighting techniques to `ConditionalRandomField` by supplying three new subclasses: `ConditionalRandomFieldWeightEmission`, `ConditionalRandomFieldWeightTrans`, and `ConditionalRandomFieldWeightLannoy`.
+- 添加指标 `FBetaVerboseMeasure`，扩展了 `FBetaMeasure`，以确保与日志插件兼容并添加一些选项。
+- 通过提供三个新的子类（`ConditionalRandomFieldWeightEmission`、`ConditionalRandomFieldWeightTrans` 和 `ConditionalRandomFieldWeightLannoy`），为 `ConditionalRandomField` 添加了三种样本加权技术。
 
-### Fixed
+### 修复
 
-- Fix error from `cached-path` version update. 
+- 修复由于 `cached-path` 版本更新导致的错误。
 
 ## [v2.9.3](https://github.com/allenai/allennlp/releases/tag/v2.9.3) - 2022-04-13
 
-### Added
+### 添加
 
-- Added `verification_tokens` argument to `TestPretrainedTransformerTokenizer`.
+- 在 `TestPretrainedTransformerTokenizer` 中添加了 `verification_tokens` 参数。
 
-### Fixed
+### 修复
 
-- Updated various dependencies
-
+- 更新了各种依赖项
 
 ## [v2.9.2](https://github.com/allenai/allennlp/releases/tag/v2.9.2) - 2022-03-21
 
-### Fixed
+### 修复
 
-- Removed unnecessary dependencies
-- Restore functionality of CLI in absence of now-optional checklist-package
-
+- 移除不必要的依赖项
+- 恢复了 CLI 在缺少现在可选的 checklist 包的情况下的功能性
 
 ## [v2.9.1](https://github.com/allenai/allennlp/releases/tag/v2.9.1) - 2022-03-09
 
-### Fixed
+### 修复
 
-- Updated dependencies, especially around doc creation.
-- Running the test suite out-of-tree (e.g. after installation) is now possible by pointing the environment variable `ALLENNLP_SRC_DIR` to the sources.
-- Silenced a warning that happens when you inappropriately clone a tensor.
-- Adding more clarification to the `Vocabulary` documentation around `min_pretrained_embeddings` and `only_include_pretrained_words`.
-- Fixed bug with type mismatch caused by latest release of `cached-path` that now returns a `Path` instead of a `str`.
+- 更新依赖项，特别是围绕文档创建的部分。
+- 通过将环境变量 `ALLENNLP_SRC_DIR` 指向源代码，现在可以在安装后运行测试套件（例如，在树外）。
+- 消除了在不恰当克隆张量时发生的警告。
+- 在 `Vocabulary` 文档中添加了关于 `min_pretrained_embeddings` 和 `only_include_pretrained_words` 的更多澄清。
+- 修复了由 `cached-path` 最新发布引起的类型不匹配错误，该版本现在返回 `Path` 而不是 `str`。
 
-### Added
+### 添加
 
-- We can now transparently read compressed input files during prediction.
-- LZMA compression is now supported.
-- Added a way to give JSON blobs as input to dataset readers in the `evaluate` command.
-- Added the argument `sub_module` in `PretrainedTransformerMismatchedEmbedder`
-- Updated the docs for `PytorchSeq2VecWrapper` to specify that `mask` is required rather than sequence lengths for clarity.
+- 现在可以在预测期间透明地读取压缩输入文件。
+- 现在支持 LZMA 压缩。
+- 在 `evaluate` 命令中，为数据集读取器提供了一种以 JSON Blob 作为输入的方式。
+- 在 `PretrainedTransformerMismatchedEmbedder` 中添加了参数 `sub_module`。
+- 更新了 `PytorchSeq2VecWrapper` 的文档，以明确 `mask` 是必需的而不是序列长度，以增强清晰度。
 
-### Changed
+### 修改
 
-- You can automatically include all words from a pretrained file when building a vocabulary by setting the value in `min_pretrained_embeddings` to `-1`
-  for that particular namespace.
-
+- 通过将 `min_pretrained_embeddings` 中的值设置为 `-1`，可以在构建词汇表时自动包含来自预训练文件的所有单词。
 
 ## [v2.9.0](https://github.com/allenai/allennlp/releases/tag/v2.9.0) - 2022-01-27
 
-### Added
+### 添加
 
-- Added an `Evaluator` class to make comparing source, target, and predictions easier.
-- Added a way to resize the vocabulary in the T5 module
-- Added an argument `reinit_modules` to `cached_transformers.get()` that allows you to re-initialize the pretrained weights of a transformer model, using layer indices or regex strings.
-- Added attribute `_should_validate_this_epoch` to `GradientDescentTrainer` that controls whether validation is run at the end of each epoch.
-- Added `ShouldValidateCallback` that can be used to configure the frequency of validation during training.
-- Added a `MaxPoolingSpanExtractor`. This `SpanExtractor` represents each span by a component wise max-pooling-operation.
-- Added support for `dist_metric` kwarg in initializing fairness metrics, which allows optionally using `wasserstein` distance (previously only KL divergence was supported).
+- 添加了一个 `Evaluator` 类，用于更轻松地比较源、目标和预测结果。
+- 在 T5 模块中添加了调整词汇表大小的方式。
+- 在 `cached_transformers.get()` 中添加了 `reinit_modules` 参数，允许重新初始化 transformer 模型的预训练权重，使用层索引或正则表达式。
+- 在 `GradientDescentTrainer` 中添加了 `_should_validate_this_epoch` 属性，用于控制是否在每个 epoch 结束时运行验证。
+- 添加了 `ShouldValidateCallback`，可用于配置训练期间验证的频率。
+- 添加了 `MaxPoolingSpanExtractor`。这个 `SpanExtractor` 通过分量最大池化操作来表示每个跨度。
+- 在初始化公平性指标时添加了 `dist_metric` kwarg 的支持，可以选择使用 `wasserstein` 距离（之前只支持 KL 散度）。
 
-### Fixed
+### 修复
 
-- Fixed the docstring information for the `FBetaMultiLabelMeasure` metric.
-- Various fixes for Python 3.9
-- Fixed the name that the `push-to-hf` command uses to store weights.
-- `FBetaMultiLabelMeasure` now works with multiple dimensions
-- Support for inferior operating systems when making hardlinks
-- Use `,` as a separator for filenames in the `evaluate` command, thus allowing for URLs (eg. `gs://...`) as input files.
-- Removed a spurious error message "'torch.cuda' has no attribute '_check_driver'" that would be appear in the logs
-  when a `ConfigurationError` for missing GPU was raised.
-- Load model on CPU post training to save GPU memory.
-- Fixed a bug in `ShouldValidateCallback` that leads to validation occuring after the first epoch regardless of `validation_start` value.
-- Fixed a bug in `ShouldValidateCallback` that leads to validation occuring every `validation_interval + 1` epochs, instead of every `validation_interval` epochs.
-- Fixed a bug in `ShouldValidateCallback` that leads to validation never occuring at the end of training.
+- 修复了 `FBetaMultiLabelMeasure` 指标的文档字符串信息。
+- 针对 Python 3.9 进行了各种修复。
+- 修复了 `push-to-hf` 命令用于存储权重时使用的名称。
+- `FBetaMultiLabelMeasure` 现在可以处理多个维度。
+- 在创建硬链接时支持次优操作系统。
+- 在 `evaluate` 命令中，使用 `,` 作为文件名的分隔符，从而允许作为输入文件的 URL（例如 `gs://...`）。
+- 移除了一个无关紧要的错误消息 "'torch.cuda' has no attribute '_check_driver'"，该消息会在引发缺少 GPU 的 `ConfigurationError` 时出现在日志中。
+- 在训练后将模型加载到 CPU 上，以节省 GPU 内存。
+- 修复了 `ShouldValidateCallback` 中的一个错误，导致无论 `validation_start` 的值如何，验证始终在第一个 epoch 后发生。
+- 修复了 `ShouldValidateCallback` 中的一个错误，导致验证每 `validation_interval + 1` 个 epochs 发生一次，而不是每 `validation_interval` 个 epochs。
+- 修复了 `ShouldValidateCallback` 中的一个错误，导致在训练结束时永远不会进行验证。
 
-### Removed
+### 移除
 
-- Removed dependency on the overrides package
-- Removed Tango components, since they now live at https://github.com/allenai/tango.
+- 移除了对 overrides 包的依赖。
+- 移除了 Tango 组件，因为它们现在位于 https://github.com/allenai/tango。
 
-### Changed
+### 修改
 
-- Make `checklist` an optional dependency.
+- 将 `checklist` 变成了可选依赖项。
 
 ## [v2.8.0](https://github.com/allenai/allennlp/releases/tag/v2.8.0) - 2021-11-01
 
-### Added
+### 添加
 
-- Added support to push models directly to the [Hugging Face Hub](https://huggingface.co/) with the command `allennlp push-to-hf`.
-- More default tests for the `TextualEntailmentSuite`.
+- 添加了直接将模型推送到 [Hugging Face Hub](https://huggingface.co/) 的支持，使用命令 `allennlp push-to-hf`。
+- 为 `TextualEntailmentSuite` 添加了更多的默认测试。
 
-### Changed
+### 修改
 
-- The behavior of `--overrides` has changed. Previously the final configuration params were simply taken as the union over the original params and the `--overrides` params.
-  But now you can use `--overrides` to completely replace any part of the original config. For example, passing `--overrides '{"model":{"type":"foo"}}'` will completely
-  replace the "model" part of the original config. However, when you just want to change a single field in the JSON structure without removing / replacing adjacent fields,
-  you can still use the "dot" syntax. For example, `--overrides '{"model.num_layers":3}'` will only change the `num_layers` parameter to the "model" part of the config, leaving
-  everything else unchanged.
-- Integrated [`cached_path`](https://github.com/allenai/cached_path) library to replace existing functionality in `common.file_utils`. This introduces some improvements without
-  any breaking changes.
+- `--overrides` 的行为已更改。以前，最终配置参数只是简单地取自原始参数和 `--overrides` 参数的并集。
+  但现在，您可以使用 `--overrides` 完全替换原始配置的任何部分。例如，传递 `--overrides '{"model":{"type":"foo"}}'` 将完全替换配置中的 "model" 部分。
+  然而，当您只想更改 JSON 结构中的单个字段而不删除/替换相邻字段时，仍然可以使用 "点" 语法。例如，`--overrides '{"model.num_layers":3}'` 将只更改配置的 "model" 部分的 `num_layers` 参数，其余部分保持不变。
+- 集成了 [`cached_path`](https://github.com/allenai/cached_path) 库，以替换 `common.file_utils` 中的现有功能。这引入了一些改进而没有任何破坏性变化。
 
-### Fixed
+### 修复
 
-- Fixed the implementation of `PairedPCABiasDirection` in `allennlp.fairness.bias_direction`, where the difference vectors should not be centered when performing the PCA.
-- Fixed the docstring of `ExponentialMovingAverage`, which was causing its argument descriptions to render inccorrectly in the docs.
+- 修复了 `allennlp.fairness.bias_direction` 中 `PairedPCABiasDirection` 的实现，其中差向量在执行 PCA 时不应居中。
+- 修复了 `ExponentialMovingAverage` 的文档字符串，修复了其参数描述在文档中错误显示的问题。
 
 ## [v2.7.0](https://github.com/allenai/allennlp/releases/tag/v2.7.0) - 2021-09-01
 
-### Added
+### 添加
 
-- Added in a default behavior to the `_to_params` method of `Registrable` so that in the case it is not implemented by the child class, it will still produce _a parameter dictionary_.
-- Added in `_to_params` implementations to all tokenizers.
-- Added support to evaluate mutiple datasets and produce corresponding output files in the `evaluate` command.
-- Added more documentation to the learning rate schedulers to include a sample config object for how to use it.
-- Moved the pytorch learning rate schedulers wrappers to their own file called `pytorch_lr_schedulers.py` so that they will have their own documentation page.
-- Added a module `allennlp.nn.parallel` with a new base class, `DdpAccelerator`, which generalizes
-  PyTorch's `DistributedDataParallel` wrapper to support other implementations. Two implementations of
-  this class are provided. The default is `TorchDdpAccelerator` (registered at "torch"), which is just a thin wrapper around
-  `DistributedDataParallel`. The other is `FairScaleFsdpAccelerator`, which wraps FairScale's
-  [`FullyShardedDataParallel`](https://fairscale.readthedocs.io/en/latest/api/nn/fsdp.html).
-  You can specify the `DdpAccelerator` in the "distributed" section of a configuration file under the key "ddp_accelerator".
-- Added a module `allennlp.nn.checkpoint` with a new base class, `CheckpointWrapper`, for implementations
-  of activation/gradient checkpointing. Two implentations are provided. The default implementation is `TorchCheckpointWrapper` (registered as "torch"),
-  which exposes [PyTorch's checkpoint functionality](https://pytorch.org/docs/stable/checkpoint.html).
-  The other is `FairScaleCheckpointWrapper` which exposes the more flexible
-  [checkpointing funtionality from FairScale](https://fairscale.readthedocs.io/en/latest/api/nn/checkpoint/checkpoint_activations.html).
-- The `Model` base class now takes a `ddp_accelerator` parameter (an instance of `DdpAccelerator`) which will be available as
-  `self.ddp_accelerator` during distributed training. This is useful when, for example, instantiating submodules in your
-  model's `__init__()` method by wrapping them with `self.ddp_accelerator.wrap_module()`. See the `allennlp.modules.transformer.t5`
-  for an example.
-- We now log batch metrics to tensorboard and wandb.
-- Added Tango components, to be explored in detail in a later post
-- Added `ScaledDotProductMatrixAttention`, and converted the transformer toolkit to use it
-- Added tests to ensure that all `Attention` and `MatrixAttention` implementations are interchangeable
-- Added a way for AllenNLP Tango to read and write datasets lazily.
-- Added a way to remix datasets flexibly
-- Added `from_pretrained_transformer_and_instances` constructor to `Vocabulary`
-- `TransformerTextField` now supports `__len__`.
-
-### Fixed
-
-- Fixed a bug in `ConditionalRandomField`: `transitions` and `tag_sequence` tensors were not initialized on the desired device causing high CPU usage (see https://github.com/allenai/allennlp/issues/2884)
-- Fixed a mispelling: the parameter `contructor_extras` in `Lazy()` is now correctly called `constructor_extras`.
-- Fixed broken links in `allennlp.nn.initializers` docs.
-- Fixed bug in `BeamSearch` where `last_backpointers` was not being passed to any `Constraint`s.
-- `TransformerTextField` can now take tensors of shape `(1, n)` like the tensors produced from a HuggingFace tokenizer.
-- `tqdm` lock is now set inside `MultiProcessDataLoading` when new workers are spawned to avoid contention when writing output.
-- `ConfigurationError` is now pickleable.
-- Checkpointer cleaning was fixed to work on Windows Paths
-- Multitask models now support `TextFieldTensor` in heads, not just in the backbone.
-- Fixed the signature of `ScaledDotProductAttention` to match the other `Attention` classes
-- `allennlp` commands will now catch `SIGTERM` signals and handle them similar to `SIGINT` (keyboard interrupt).
-- The `MultiProcessDataLoader` will properly shutdown its workers when a `SIGTERM` is received.
-- Fixed the way names are applied to Tango `Step` instances.
-- Fixed a bug in calculating loss in the distributed setting.
-- Fixed a bug when extending a sparse sequence by 0 items.
-
-### Changed
-
-- The type of the `grad_norm` parameter of `GradientDescentTrainer` is now `Union[float, bool]`,
-  with a default value of `False`. `False` means gradients are not rescaled and the gradient
-  norm is never even calculated. `True` means the gradients are still not rescaled but the gradient
-  norm is calculated and passed on to callbacks. A `float` value means gradients are rescaled.
-- `TensorCache` now supports more concurrent readers and writers.
-- We no longer log parameter statistics to tensorboard or wandb by default.
+- 在 `Registrable` 的 `_to_params` 方法中添加了默认行为
 
 ## [v2.6.0](https://github.com/allenai/allennlp/releases/tag/v2.6.0) - 2021-07-19
 

@@ -22,13 +22,11 @@ DOCKER_RUN_CMD = docker run --rm \
 		-v $$HOME/.cache/huggingface:/root/.cache/huggingface \
 		-v $$HOME/nltk_data:/root/nltk_data
 
-# These nltk packages are used by the 'checklist' module. They are downloaded automatically
-# if not found when `checklist` is imported, but it's good to download the ahead of time
-# to avoid potential race conditions.
+# 这些 NLTK 包被 'checklist' 模块使用。如果在导入 `checklist` 时找不到它们，它们会被自动下载，但最好提前下载，以避免潜在的竞争条件。
 NLTK_DOWNLOAD_CMD = python -c 'import nltk; [nltk.download(p) for p in ("wordnet", "wordnet_ic", "sentiwordnet", "omw", "omw-1.4")]'
 
-ifeq ($(shell uname),Darwin)
-ifeq ($(shell which gsed),)
+ifeq ($(shell uname),Darwin)  #检查当前操作系统是否是 macOS（Darwin 是 macOS 的内核）
+ifeq ($(shell which gsed),)  #如果当前操作系统是 macOS，并且 gsed 没有安装（通过 which gsed 命令来检查是否可以找到 gsed），则显示错误信息
 $(error Please install GNU sed with 'brew install gnu-sed')
 else
 SED = gsed
@@ -37,6 +35,7 @@ else
 SED = sed
 endif
 
+# 导入 AllenNLP 库中的 VERSION 变量，并打印出带有版本号的字符串。
 .PHONY : version
 version :
 	@python -c 'from allennlp.version import VERSION; print(f"AllenNLP v{VERSION}")'
@@ -139,6 +138,7 @@ serve-docs : build-all-api-docs $(MD_DOCS_CONF) $(MD_DOCS) $(MD_DOCS_EXTRAS)
 .PHONY : update-docs
 update-docs : $(MD_DOCS) $(MD_DOCS_EXTRAS)
 
+#以下规则确保了所有的 API 文档都会被按照指定的结构和路径生成。
 $(MD_DOCS_ROOT)README.md : README.md
 	cp $< $@
 	# Alter the relative path of the README image for the docs.

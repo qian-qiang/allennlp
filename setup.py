@@ -14,13 +14,22 @@ from setuptools import find_packages, setup
 #   X.YrcN  # Release Candidate
 #   X.Y     # Final release
 
+#在软件版本控制中，特别是遵循 PEP 440 规范的语义版本（Semantic Versioning），版本号通常采用一定的命名约定来表示不同的发布状态和类型。以下是常见的版本标记解释：
+# **Final release (`X.Y`)**: 表示稳定版本或正式发布版本。通常意味着该版本经过了测试和验证，可以用于生产环境。
+# **Alpha release (`X.YaN`)**: 表示预览版本或开发中版本。这种版本可能会包含较多的 bug，并且功能可能不完整。通常这些版本供开发人员和测试人员使用，不建议在生产环境中使用。
+# **Beta release (`X.YbN`)**: 表示测试版本或公开测试版本。这种版本相对于 Alpha 版本来说更加稳定，但仍可能存在一些问题。通常这些版本用于公开测试和用户反馈，不建议在生产环境中使用。
+# **Release Candidate (`X.YrcN`)**: 表示候选版本。这种版本通常是开发完成后的最后一个测试版本，如果没有发现重大问题，可能会成为正式的 Final Release 版本。
+#在 PEP 440 中，版本号的格式和命名规则有详细的定义，以便在软件开发和版本管理中能够清晰地区分不同状态和类型的发布版本。
 
+
+#这段代码是用来解析一个给定路径下的 requirements 文件，并根据文件内容生成两个主要的数据结构：requirements 列表和 extras 字典。
 def parse_requirements_file(path, allowed_extras: set = None, include_all_extra: bool = True):
-    requirements = []
-    extras = defaultdict(list)
+    requirements = []                       #存储主要的依赖项的列表。
+    extras = defaultdict(list)              #extras: 使用 defaultdict 创建的字典，用于存储不同额外依赖的依赖项列表。defaultdict(list) 确保如果某个额外依赖还未出现，也能以空列表的形式进行初始化。
     with open(path) as requirements_file:
         import re
 
+        #fix_url_dependencies 函数用于修正 URL 形式的依赖项描述，确保其符合 Pip 和 setuptools 的处理方式。它通过正则表达式匹配 GitHub 仓库的 URL，并返回修正后的依赖描述。
         def fix_url_dependencies(req: str) -> str:
             """Pip and setuptools disagree about how URL dependencies should be handled."""
             m = re.match(

@@ -1,4 +1,8 @@
 # YAML 1.2
+# affiliation:所属机构
+# family-names ：姓
+# given-names：名
+# CITATION.cff 文件标准化了提供软件项目引用元数据的方式，使得其他人能够更容易地在论文和项目中正确地引用和致谢这个软件项目。
 ---
 authors: 
   -

@@ -1,381 +1,253 @@
-<div align="center">
-    <br>
-    <img src="https://raw.githubusercontent.com/allenai/allennlp/main/docs/img/allennlp-logo-dark.png" width="400"/>
-    <p>
-    An Apache 2.0 NLP research library, built on PyTorch, for developing state-of-the-art deep learning models on a wide variety of linguistic tasks.
-    </p>
-    <hr/>
-</div>
-<p align="center">
-    <a href="https://github.com/allenai/allennlp/actions">
-        <img alt="CI" src="https://github.com/allenai/allennlp/workflows/CI/badge.svg?event=push&branch=main">
-    </a>
-    <a href="https://pypi.org/project/allennlp/">
-        <img alt="PyPI" src="https://img.shields.io/pypi/v/allennlp">
-    </a>
-    <a href="https://github.com/allenai/allennlp/blob/main/LICENSE">
-        <img alt="License" src="https://img.shields.io/github/license/allenai/allennlp.svg?color=blue&cachedrop">
-    </a>
-    <a href="https://codecov.io/gh/allenai/allennlp">
-        <img alt="Codecov" src="https://codecov.io/gh/allenai/allennlp/branch/main/graph/badge.svg">
-    </a>
-    <a href="https://optuna.org">
-        <img alt="Optuna" src="https://img.shields.io/badge/Optuna-integrated-blue">
-    </a>
-    <br/>
-</p>
+一个基于 PyTorch 构建的 Apache 2.0 NLP 研究库，用于开发各种语言任务的最先进的深度学习模型。
 
-⚠️ **NOTICE:** The AllenNLP library is now in maintenance mode. That means we are no longer adding new features or upgrading dependencies. We will still respond to questions and address bugs as they arise up until December 16th, 2022. If you have any concerns or are interested in maintaining AllenNLP going forward, please open an issue on this repository.
+⚠️ **注意：** AllenNLP 现在处于维护模式。这意味着我们不再添加新功能或升级依赖项。直到 2022 年 12 月 16 日，我们仍会响应问题并处理错误。如果您有任何疑问或有兴趣维护 AllenNLP，请在此存储库上提出问题。
 
-AllenNLP has been a big success, but as the field is advancing quickly it's time to focus on new initiatives. We're working hard to make [AI2 Tango](https://github.com/allenai/tango) the best way to organize research codebases. If you are an active user of AllenNLP, here are some suggested alternatives:
-* If you like the trainer, the configuration language, or are simply looking for a better way to manage your experiments, check out [AI2 Tango](https://github.com/allenai/tango).
-* If you like AllenNLP's `modules` and `nn` packages, check out [delmaksym/allennlp-light](https://github.com/delmaksym/allennlp-light). It's even compatible with [AI2 Tango](https://github.com/allenai/tango)!
-* If you like the framework aspect of AllenNLP, check out [flair](https://github.com/flairNLP/flair). It has multiple state-of-art NLP models and allows you to easily use pretrained embeddings such as those from transformers.
-* If you like the AllenNLP metrics package, check out [torchmetrics](https://torchmetrics.readthedocs.io/en/stable/). It has the same API as AllenNLP, so it should be a quick learning curve to make the switch.
-* If you want to vectorize text, try [the transformers library](https://github.com/huggingface/transformers).
-* If you want to maintain the AllenNLP Fairness or Interpret components, please get in touch. There is no alternative to it, so we are looking for a dedicated maintainer.
-* If you are concerned about other AllenNLP functionality, please create an issue. Maybe we can find another way to continue supporting your use case.
+AllenNLP 取得了巨大成功，但是由于领域进展迅速，现在是专注于新项目的时候了。我们正在努力使 [AI2 Tango](https://github.com/allenai/tango) 成为组织研究代码库的最佳方式。如果您是 AllenNLP 的积极用户，这里有一些建议的替代方案：
+* 如果您喜欢训练器、配置语言或者仅仅是寻找更好的实验管理方式，请查看 [AI2 Tango](https://github.com/allenai/tango)。
+* 如果您喜欢 AllenNLP 的 `modules` 和 `nn` 包，请查看 [delmaksym/allennlp-light](https://github.com/delmaksym/allennlp-light)。它甚至与 [AI2 Tango](https://github.com/allenai/tango) 兼容！
+* 如果您喜欢 AllenNLP 的框架方面，请查看 [flair](https://github.com/flairNLP/flair)。它拥有多个最先进的 NLP 模型，并且允许您轻松使用如 Transformers 的预训练嵌入。
+* 如果您喜欢 AllenNLP 的度量包，请查看 [torchmetrics](https://torchmetrics.readthedocs.io/en/stable/)。它具有与 AllenNLP 相同的 API，因此切换应该是一个快速的学习过程。
+* 如果您想要对文本进行向量化，请尝试 [transformers library](https://github.com/huggingface/transformers)。
+* 如果您想要维护 AllenNLP 的公平性或解释组件，请联系我们。目前还没有替代方案，因此我们正在寻找专门的维护者。
+* 如果您关注其他 AllenNLP 功能，请创建一个问题。也许我们可以找到另一种方式来继续支持您的用例。
 
-## Quick Links
+## 快速链接
 
-- ↗️ [Website](https://allennlp.org/)
-- 🔦 [Guide](https://guide.allennlp.org/)
-- 🖼 [Gallery](https://gallery.allennlp.org)
-- 💻 [Demo](https://demo.allennlp.org)
-- 📓 [Documentation](https://docs.allennlp.org/) ( [latest](https://docs.allennlp.org/latest/) | [stable](https://docs.allennlp.org/stable/) | [commit](https://docs.allennlp.org/main/) )
-- ⬆️ [Upgrade Guide from 1.x to 2.0](https://github.com/allenai/allennlp/discussions/4933)
+- ↗️ [网站](https://allennlp.org/)
+- 🔦 [指南](https://guide.allennlp.org/)
+- 🖼 [画廊](https://gallery.allennlp.org)
+- 💻 [演示](https://demo.allennlp.org)
+- 📓 [文档](https://docs.allennlp.org/) ( [最新](https://docs.allennlp.org/latest/) | [稳定](https://docs.allennlp.org/stable/) | [提交](https://docs.allennlp.org/main/) )
+- ⬆️ [从 1.x 升级到 2.0 的指南](https://github.com/allenai/allennlp/discussions/4933)
 - ❓ [Stack Overflow](https://stackoverflow.com/questions/tagged/allennlp)
-- ✋ [Contributing Guidelines](CONTRIBUTING.md)
-- 🤖 [Officially Supported Models](https://github.com/allenai/allennlp-models)
-    - [Pretrained Models](https://github.com/allenai/allennlp-models/blob/main/allennlp_models/pretrained.py)
-    - [Documentation](https://docs.allennlp.org/models/) ( [latest](https://docs.allennlp.org/models/latest/) | [stable](https://docs.allennlp.org/models/stable/) | [commit](https://docs.allennlp.org/models/main/) )
-- ⚙️ [Continuous Build](https://github.com/allenai/allennlp/actions)
-- 🌙 [Nightly Releases](https://pypi.org/project/allennlp/#history)
+- ✋ [贡献指南](CONTRIBUTING.md)
+- 🤖 [官方支持的模型](https://github.com/allenai/allennlp-models)
+    - [预训练模型](https://github.com/allenai/allennlp-models/blob/main/allennlp_models/pretrained.py)
+    - [文档](https://docs.allennlp.org/models/) ( [最新](https://docs.allennlp.org/models/latest/) | [稳定](https://docs.allennlp.org/models/stable/) | [提交](https://docs.allennlp.org/models/main/) )
+- ⚙️ [持续构建](https://github.com/allenai/allennlp/actions)
+- 🌙 [每夜版发布](https://pypi.org/project/allennlp/#history)
 
-## In this README
+## 在此 README 中
 
-- [Getting Started Using the Library](#getting-started-using-the-library)
-- [Plugins](#plugins)
-- [Package Overview](#package-overview)
-- [Installation](#installation)
-    - [Installing via pip](#installing-via-pip)
-    - [Installing using Docker](#installing-using-docker)
-    - [Installing from source](#installing-from-source)
-- [Running AllenNLP](#running-allennlp)
-- [Issues](#issues)
-- [Contributions](#contributions)
-- [Citing](#citing)
-- [Team](#team)
+- [开始使用库](#getting-started-using-the-library)
+- [插件](#plugins)
+- [包概述](#package-overview)
+- [安装](#installation)
+    - [通过 pip 安装](#installing-via-pip)
+    - [使用 Docker 安装](#installing-using-docker)
+    - [从源代码安装](#installing-from-source)
+- [运行 AllenNLP](#running-allennlp)
+- [问题](#issues)
+- [贡献](#contributions)
+- [引用](#citing)
+- [团队](#team)
 
-## Getting Started Using the Library
+## 开始使用库
 
-If you're interested in using AllenNLP for model development, we recommend you check out the
-[AllenNLP Guide](https://guide.allennlp.org) for a thorough introduction to the library, followed by our more advanced guides
-on [GitHub Discussions](https://github.com/allenai/allennlp/discussions/categories/guides).
+如果您对使用 AllenNLP 进行模型开发感兴趣，我们建议您查看 [AllenNLP 指南](https://guide.allennlp.org) 以深入了解库，然后查看我们更高级的指南，例如在 [GitHub 讨论](https://github.com/allenai/allennlp/discussions/categories/guides) 上。
 
-When you're ready to start your project, we've created a couple of template repositories that you can use as a starting place:
+当您准备开始项目时，我们创建了几个模板存储库，供您作为起点使用：
 
-* If you want to use `allennlp train` and config files to specify experiments, use [this
-  template](https://github.com/allenai/allennlp-template-config-files). We recommend this approach.
-* If you'd prefer to use python code to configure your experiments and run your training loop, use
-  [this template](https://github.com/allenai/allennlp-template-python-script). There are a few
-  things that are currently a little harder in this setup (loading a saved model, and using
-  distributed training), but otherwise it's functionality equivalent to the config files
-  setup.
+* 如果您想使用 `allennlp train` 和配置文件来指定实验，请使用 [此模板](https://github.com/allenai/allennlp-template-config-files)。我们推荐使用这种方法。
+* 如果您更喜欢使用 Python 代码配置实验并运行训练循环，请使用 [此模板](https://github.com/allenai/allennlp-template-python-script)。在这种设置中，有些事情目前稍微麻烦一些（如加载保存的模型和使用分布式训练），但除此之外，功能与配置文件设置等效。
 
-In addition, there are external tutorials:
+此外，还有一些外部教程：
 
-* [Hyperparameter optimization for AllenNLP using Optuna](https://medium.com/optuna/hyperparameter-optimization-for-allennlp-using-optuna-54b4bfecd78b)
-* [Training with multiple GPUs in AllenNLP](https://medium.com/ai2-blog/tutorial-how-to-train-with-multiple-gpus-in-allennlp-c4d7c17eb6d6)
-* [Training on larger batches with less memory in AllenNLP](https://medium.com/ai2-blog/tutorial-training-on-larger-batches-with-less-memory-in-allennlp-1cd2047d92ad)
-* [How to upload transformer weights and tokenizers from AllenNLP to HuggingFace](https://medium.com/ai2-blog/tutorial-how-to-upload-transformer-weights-and-tokenizers-from-allennlp-to-huggingface-ecf6c0249bf)
+* [使用 Optuna 对 AllenNLP 进行超参数优化](https://medium.com/optuna/hyperparameter-optimization-for-allennlp-using-optuna-54b4bfecd78b)
+* [在 AllenNLP 中使用多个 GPU 进行训练](https://medium.com/ai2-blog/tutorial-how-to-train-with-multiple-gpus-in-allennlp-c4d7c17eb6d6)
+* [在 AllenNLP 中使用更大批次进行训练，内存占用更少](https://medium.com/ai2-blog/tutorial-training-on-larger-batches-with-less-memory-in-allennlp-1cd2047d92ad)
+* [如何将 AllenNLP 中的转换器权重和分词器上传到 HuggingFace](https://medium.com/ai2-blog/tutorial-how-to-upload-transformer-weights-and-tokenizers-from-allennlp-to-huggingface-ecf6c0249bf)
 
-And others on the [AI2 AllenNLP blog](https://medium.com/ai2-blog/allennlp/home).
+以及其他在 [AI2 AllenNLP 博客](https://medium.com/ai2-blog/allennlp/home) 上的教程。
+## 插件
 
-## Plugins
+AllenNLP 支持动态加载 "插件"。插件就是提供自定义注册类或额外 `allennlp` 子命令的 Python 包。
 
-AllenNLP supports loading "plugins" dynamically. A plugin is just a Python package that
-provides custom registered classes or additional `allennlp` subcommands.
+有一个开源插件生态系统，其中一些由 AI2 团队在此维护，另一些由更广泛的社区维护。
 
-There is ecosystem of open source plugins, some of which are maintained by the AllenNLP
-team here at AI2, and some of which are maintained by the broader community.
+"https://github.com/allenai/allennlp-models"一系列最先进的模型
+"https://github.com/allenai/allennlp-semparse"用于构建语义解析器的框架
+"https://github.com/allenai/allennlp-server"用于提供模型服务的简单演示服务器
+"https://github.com/himkt/allennlp-optuna"
+"https://himkt.github.io/profile/" 集成了"https://optuna.org/"的超参数优化
 
-<table>
-<tr>
-    <td><b> Plugin </b></td>
-    <td><b> Maintainer </b></td>
-    <td><b> CLI </b></td>
-    <td><b> Description </b></td>
-</tr>
-<tr>
-    <td> <a href="https://github.com/allenai/allennlp-models"><b>allennlp-models</b></a> </td>
-    <td> AI2 </td>
-    <td> No </td>
-    <td> A collection of state-of-the-art models </td>
-</tr>
-<tr>
-    <td> <a href="https://github.com/allenai/allennlp-semparse"><b>allennlp-semparse</b></a> </td>
-    <td> AI2 </td>
-    <td> No </td>
-    <td> A framework for building semantic parsers </td>
-</tr>
-<tr>
-    <td> <a href="https://github.com/allenai/allennlp-server"><b>allennlp-server</b></a> </td>
-    <td> AI2 </td>
-    <td> Yes </td>
-    <td> A simple demo server for serving models </td>
-</tr>
-<tr>
-    <td> <a href="https://github.com/himkt/allennlp-optuna"><b>allennlp-optuna</b></a> </td>
-    <td> <a href="https://himkt.github.io/profile/">Makoto Hiramatsu</a> </td>
-    <td> Yes </td>
-    <td> <a href="https://optuna.org/">Optuna</a> integration for hyperparameter optimization </td>
-</tr>
-</table>
 
-AllenNLP will automatically find any official AI2-maintained plugins that you have installed,
-but for AllenNLP to find personal or third-party plugins you've installed,
-you also have to create either a local plugins file named `.allennlp_plugins`
-in the directory where you run the `allennlp` command, or a global plugins file at `~/.allennlp/plugins`.
-The file should list the plugin modules that you want to be loaded, one per line.
+AllenNLP 将自动发现您已安装的所有官方 AI2 维护的插件，但为了让 AllenNLP 发现您安装的个人或第三方插件，
+您还需要在运行 `allennlp` 命令的目录中创建一个名为 `.allennlp_plugins` 的本地插件文件，
+或者在 `~/.allennlp/plugins` 处创建一个全局插件文件。该文件应列出您希望加载的插件模块，每行一个。
 
-To test that your plugins can be found and imported by AllenNLP, you can run the `allennlp test-install` command.
-Each discovered plugin will be logged to the terminal.
+要测试 AllenNLP 是否可以找到并导入您的插件，您可以运行 `allennlp test-install` 命令。
+每个发现的插件都将记录到终端上。
 
-For more information about plugins, see the [plugins API docs](https://docs.allennlp.org/main/api/common/plugins/). And for information on how to create a custom subcommand
-to distribute as a plugin, see the [subcommand API docs](https://docs.allennlp.org/main/api/commands/subcommand/).
+有关插件的更多信息，请参阅 [插件 API 文档](https://docs.allennlp.org/main/api/common/plugins/)。关于如何创建一个自定义子命令以分发为插件的信息，请参阅 [子命令 API 文档](https://docs.allennlp.org/main/api/commands/subcommand/)。
 
-## Package Overview
+## 包概述
 
-<table>
-<tr>
-    <td><b> allennlp </b></td>
-    <td> An open-source NLP research library, built on PyTorch </td>
-</tr>
-<tr>
-    <td><b> allennlp.commands </b></td>
-    <td> Functionality for the CLI </td>
-</tr>
-<tr>
-    <td><b> allennlp.common </b></td>
-    <td> Utility modules that are used across the library </td>
-</tr>
-<tr>
-    <td><b> allennlp.data </b></td>
-    <td> A data processing module for loading datasets and encoding strings as integers for representation in matrices </td>
-</tr>
-<tr>
-    <td><b> allennlp.fairness </b></td>
-    <td> A module for bias mitigation and fairness algorithms and metrics </td>
-</tr>
-<tr>
-    <td><b> allennlp.modules </b></td>
-    <td> A collection of PyTorch modules for use with text </td>
-</tr>
-<tr>
-    <td><b> allennlp.nn </b></td>
-    <td> Tensor utility functions, such as initializers and activation functions </td>
-</tr>
-<tr>
-    <td><b> allennlp.training </b></td>
-    <td> Functionality for training models </td>
-</tr>
-</table>
+allennlp 基于 PyTorch 的开源 NLP 研究库
+allennlp.commands CLI 功能 
+allennlp.common  在整个库中使用的实用模块
+allennlp.data 用于加载数据集并将字符串编码为矩阵中的整数表示的数据处理模块
+allennlp.fairness  用于偏差缓解和公平性算法及指标的模块
+allennlp.modules 用于文本的一组 PyTorch 模块 
+allennlp.nn 张量实用函数，如初始化器和激活函数 
+allennlp.training  用于训练模型的功能 
 
-## Installation
+## 安装
 
-AllenNLP requires Python 3.6.1 or later and [PyTorch](https://pytorch.org/).
+AllenNLP 需要 Python 3.6.1 或更高版本以及 [PyTorch](https://pytorch.org/)。
 
-We support AllenNLP on Mac and Linux environments. We presently do not support Windows but are open to contributions.
+我们支持在 Mac 和 Linux 环境下使用 AllenNLP。目前我们不支持 Windows，但欢迎贡献。
 
-### Installing via conda-forge
+### 通过 conda-forge 安装
 
-The simplest way to install AllenNLP is using conda (you can choose a different python version):
+安装 AllenNLP 的最简单方法是使用 conda（您可以选择不同的 Python 版本）：
 
 ```
 conda install -c conda-forge python=3.8 allennlp
 ```
 
-To install optional packages, such as `checklist`, use
+要安装可选包，如 `checklist`，请使用：
 
 ```
 conda install -c conda-forge allennlp-checklist
 ```
 
-or simply install `allennlp-all` directly. The plugins mentioned above are similarly installable, e.g.
+或者直接安装 `allennlp-all`。上面提到的插件同样可以安装，例如：
 
 ```
 conda install -c conda-forge allennlp-models allennlp-semparse allennlp-server allennlp-optuna
 ```
+### 使用 pip 安装
 
-### Installing via pip
+建议在安装 AllenNLP 之前先安装 PyTorch 生态系统，具体步骤请参考 [pytorch.org](https://pytorch.org/)。
 
-It's recommended that you install the PyTorch ecosystem **before** installing AllenNLP by following the instructions on [pytorch.org](https://pytorch.org/).
-
-After that, just run `pip install allennlp`.
-
-
-
-> ⚠️ If you're using Python 3.7 or greater, you should ensure that you don't have the PyPI version of `dataclasses` installed after running the above command, as this could cause issues on certain platforms. You can quickly check this by running `pip freeze | grep dataclasses`. If you see something like `dataclasses=0.6` in the output, then just run `pip uninstall -y dataclasses`.
-
-If you need pointers on setting up an appropriate Python environment or would like to install AllenNLP using a different method, see below.
-
-#### Setting up a virtual environment
-
-[Conda](https://conda.io/) can be used set up a virtual environment with the
-version of Python required for AllenNLP.  If you already have a Python 3
-environment you want to use, you can skip to the 'installing via pip' section.
-
-1.  [Download and install Conda](https://conda.io/projects/conda/en/latest/user-guide/install/index.html).
-
-2.  Create a Conda environment with Python 3.8 (3.7 or 3.9 would work as well):
-
-    ```
-    conda create -n allennlp_env python=3.8
-    ```
-
-3.  Activate the Conda environment. You will need to activate the Conda environment in each terminal in which you want to use AllenNLP:
-
-    ```
-    conda activate allennlp_env
-    ```
-
-#### Installing the library and dependencies
-
-Installing the library and dependencies is simple using `pip`.
+安装完成后，只需运行以下命令来安装 AllenNLP：
 
 ```bash
 pip install allennlp
 ```
 
-To install the optional dependencies, such as `checklist`, run
+> ⚠️ 如果您使用的是 Python 3.7 或更高版本，请确保在运行上述命令后不要安装了 PyPI 版本的 `dataclasses`，因为这可能会在某些平台上造成问题。您可以通过运行 `pip freeze | grep dataclasses` 快速检查。如果输出中看到类似 `dataclasses=0.6` 的内容，请运行 `pip uninstall -y dataclasses` 卸载它。
+
+如果您需要建立合适的 Python 环境或者希望使用不同的安装方法，请参考下面的说明。
+
+#### 设置虚拟环境
+
+您可以使用 Conda 来设置一个包含所需 Python 版本的虚拟环境，用于安装 AllenNLP。如果您已经有一个想要使用的 Python 3 环境，可以直接跳到“通过 pip 安装”部分。
+
+1. [下载并安装 Conda](https://conda.io/projects/conda/en/latest/user-guide/install/index.html)。
+
+2. 创建一个包含 Python 3.8（也可以是 3.7 或 3.9）的 Conda 环境：
+
+    ```bash
+    conda create -n allennlp_env python=3.8
+    ```
+
+3. 激活 Conda 环境。您需要在每个希望使用 AllenNLP 的终端中激活 Conda 环境：
+
+    ```bash
+    conda activate allennlp_env
+    ```
+
+#### 安装库和依赖项
+
+使用 `pip` 简单地安装库和依赖项：
+
+```bash
+pip install allennlp
+```
+
+要安装可选依赖项，如 `checklist`，运行：
 
 ```bash
 pip install allennlp[checklist]
 ```
-Or you can just install all optional dependencies with `pip install allennlp[all]`.
 
-*Looking for bleeding edge features? You can install nightly releases directly from [pypi](https://pypi.org/project/allennlp/#history)*
+或者您也可以直接安装所有可选依赖项：
 
-AllenNLP installs a script when you install the python package, so you can run allennlp commands just by typing `allennlp` into a terminal.  For example, you can now test your installation with `allennlp test-install`.
+```bash
+pip install allennlp[all]
+```
 
-You may also want to install `allennlp-models`, which contains the NLP constructs to train and run our officially
-supported models, many of which are hosted at [https://demo.allennlp.org](https://demo.allennlp.org).
+*想要尝试最新的功能？您可以直接从 [pypi](https://pypi.org/project/allennlp/#history) 安装夜间版本。*
+
+安装 AllenNLP 后，会在安装 Python 包时安装一个脚本，这样您就可以在终端中直接输入 `allennlp` 运行 AllenNLP 命令。例如，您现在可以使用 `allennlp test-install` 测试您的安装。
+
+您可能还想安装 `allennlp-models`，其中包含了用于训练和运行我们官方支持的模型的 NLP 构件，其中许多模型托管在 [https://demo.allennlp.org](https://demo.allennlp.org)。
 
 ```bash
 pip install allennlp-models
 ```
 
-### Installing using Docker
+### 使用 Docker 安装
 
-Docker provides a virtual machine with everything set up to run AllenNLP--
-whether you will leverage a GPU or just run on a CPU.  Docker provides more
-isolation and consistency, and also makes it easy to distribute your
-environment to a compute cluster.
+Docker 提供了一个虚拟机，其中已经安装了所有 AllenNLP 的依赖项，无论您是使用 GPU 还是 CPU 运行。Docker 提供更好的隔离性和一致性，并且可以轻松地将您的环境分发到计算集群中。
 
-AllenNLP provides [official Docker images](https://hub.docker.com/r/allennlp/allennlp) with the library and all of its dependencies installed.
+AllenNLP 提供了[官方 Docker 镜像](https://hub.docker.com/r/allennlp/allennlp)，已安装了库和所有依赖项。
 
-Once you have [installed Docker](https://docs.docker.com/engine/installation/),
-you should also install the [NVIDIA Container Toolkit](https://github.com/NVIDIA/nvidia-docker)
-if you have GPUs available.
+安装 Docker 后，如果您有 GPU 可用，还应该安装 [NVIDIA Container Toolkit](https://github.com/NVIDIA/nvidia-docker)。
 
-Then run the following command to get an environment that will run on GPU:
+然后运行以下命令以获取一个能在 GPU 上运行的环境：
 
 ```bash
 mkdir -p $HOME/.allennlp/
 docker run --rm --gpus all -v $HOME/.allennlp:/root/.allennlp allennlp/allennlp:latest
 ```
 
-You can test the Docker environment with
+您可以使用以下命令测试 Docker 环境：
 
 ```bash
 docker run --rm --gpus all -v $HOME/.allennlp:/root/.allennlp allennlp/allennlp:latest test-install 
 ```
 
-If you don't have GPUs available, just omit the `--gpus all` flag.
+如果没有 GPU 可用，只需省略 `--gpus all` 标志即可。
 
-#### Building your own Docker image
+#### 构建自己的 Docker 镜像
 
-For various reasons you may need to create your own AllenNLP Docker image, such as if you need a different version
-of PyTorch. To do so, just run `make docker-image` from the root of your local clone of AllenNLP.
+出于各种原因，您可能需要创建自己的 AllenNLP Docker 镜像，比如需要不同版本的 PyTorch。只需从 AllenNLP 的本地克隆的根目录运行 `make docker-image` 即可。
 
-By default this builds an image with the tag `allennlp/allennlp`, but you can change this to anything you want
-by setting the `DOCKER_IMAGE_NAME` flag when you call `make`. For example,
-`make docker-image DOCKER_IMAGE_NAME=my-allennlp`.
+默认情况下，这将使用 `allennlp/allennlp` 标签构建一个镜像，但您可以通过设置 `DOCKER_IMAGE_NAME` 标志来更改名称。例如，`make docker-image DOCKER_IMAGE_NAME=my-allennlp`。
 
-If you want to use a different version of Python or PyTorch, set the flags `DOCKER_PYTHON_VERSION` and `DOCKER_TORCH_VERSION` to something like
-`3.9` and `1.9.0-cuda10.2`, respectively. These flags together determine the base image that is used. You can see the list of valid
-combinations in this GitHub Container Registry: [github.com/allenai/docker-images/pkgs/container/pytorch](https://github.com/allenai/docker-images/pkgs/container/pytorch).
+如果您想使用不同版本的 Python 或 PyTorch，请将 `DOCKER_PYTHON_VERSION` 和 `DOCKER_TORCH_VERSION` 标志设置为类似 `3.9` 和 `1.9.0-cuda10.2` 的值。这些标志共同决定所使用的基础镜像。您可以在 GitHub Container Registry 上查看有效组合的列表：[github.com/allenai/docker-images/pkgs/container/pytorch](https://github.com/allenai/docker-images/pkgs/container/pytorch)。
 
-After building the image you should be able to see it listed by running `docker images allennlp`.
+构建完成后，您可以运行 `docker images allennlp` 查看已构建的镜像列表。
 
 ```
 REPOSITORY          TAG                 IMAGE ID            CREATED             SIZE
 allennlp/allennlp   latest              b66aee6cb593        5 minutes ago       2.38GB
 ```
 
-### Installing from source
+### 从源代码安装
 
-You can also install AllenNLP by cloning our git repository:
+您还可以通过克隆我们的 git 仓库来安装 AllenNLP：
 
 ```bash
 git clone https://github.com/allenai/allennlp.git
 ```
 
-Create a Python 3.7 or 3.8 virtual environment, and install AllenNLP in `editable` mode by running:
+创建一个 Python 3.7 或 3.8 的虚拟环境，并通过以下命令以 `editable` 模式安装 AllenNLP：
 
 ```bash
 pip install -U pip setuptools wheel
 pip install --editable .[dev,all]
 ```
 
-This will make `allennlp` available on your system but it will use the sources from the local clone
-you made of the source repository.
+这样会在系统中使 `allennlp` 可用，但会使用您克隆的本地源代码。
 
-You can test your installation with `allennlp test-install`.
-See [https://github.com/allenai/allennlp-models](https://github.com/allenai/allennlp-models)
-for instructions on installing `allennlp-models` from source.
+您可以使用 `allennlp test-install` 测试您的安装。有关从源代码安装 `allennlp-models` 的说明，请参阅 [https://github.com/allenai/allennlp-models](https://github.com/allenai/allennlp-models)。
 
-## Running AllenNLP
+## 运行 AllenNLP
 
-Once you've installed AllenNLP, you can run the command-line interface
-with the `allennlp` command (whether you installed from `pip` or from source).
-`allennlp` has various subcommands such as `train`, `evaluate`, and `predict`.
-To see the full usage information, run `allennlp --help`.
+安装完 AllenNLP 后，您可以使用 `allennlp` 命令运行命令行界面（无论是从 `pip` 还是从源代码安装）。`allennlp` 有各种子命令，如 `train`、`evaluate` 和 `predict`。要查看完整的使用信息，请运行 `allennlp --help`。
 
-You can test your installation by running  `allennlp test-install`.
+您可以通过运行 `allennlp test-install` 测试您的安装。
 
-## Issues
+## 问题
 
-Everyone is welcome to file issues with either feature requests, bug reports, or general questions.  As a small team with our own internal goals, we may ask for contributions if a prompt fix doesn't fit into our roadmap.  To keep things tidy we will often close issues we think are answered, but don't hesitate to follow up if further discussion is needed.
+欢迎所有人提交问题，无论是功能请求、错误报告还是一般问题。作为一个拥有自己内部目标的小团队，如果即时修复不符合我们的路线图，我们可能会要求贡献。为了保持整洁，我们通常会关闭我们认为已回答的问题，但如果需要进一步讨论，请随时跟进。
 
-## Contributions
+## 贡献
 
-The AllenNLP team at AI2 ([@allenai](https://github.com/allenai)) welcomes contributions from the community. 
-If you're a first time contributor, we recommend you start by reading our [CONTRIBUTING.md](https://github.com/allenai/allennlp/blob/main/CONTRIBUTING.md) guide.
-Then have a look at our issues with the tag [**`Good First Issue`**](https://github.com/allenai/allennlp/issues?q=is%3Aissue+is%3Aopen+label%3A%22Good+First+Issue%22).
+AI2 团队（[@allenai](https://github.com/allenai)）欢迎社区的贡献。如果您是第一次贡献者，我们建议您首先阅读我们的 [CONTRIBUTING.md](https://github.com/allenai/allennlp/blob/main/CONTRIBUTING.md) 指南。然后查看带有标签 [**`Good First Issue`**](https://github.com/allenai/allennlp/issues?q=is%3Aissue+is%3Aopen+label%3A%22Good+First+Issue%22) 的问题。
 
-If you would like to contribute a larger feature, we recommend first creating an issue with a proposed design for discussion. This will prevent you from spending significant time on an implementation which has a technical limitation someone could have pointed out early on. Small contributions can be made directly in a pull request.
-
-Pull requests (PRs) must have one approving review and no requested changes before they are merged.  As AllenNLP is primarily driven by AI2 we reserve the right to reject or revert contributions that we don't think are good additions.
-
-## Citing
-
-If you use AllenNLP in your research, please cite [AllenNLP: A Deep Semantic Natural Language Processing Platform](https://www.semanticscholar.org/paper/AllenNLP%3A-A-Deep-Semantic-Natural-Language-Platform-Gardner-Grus/a5502187140cdd98d76ae711973dbcdaf1fef46d).
-
-```bibtex
-@inproceedings{Gardner2017AllenNLP,
-  title={AllenNLP: A Deep Semantic Natural Language Processing Platform},
-  author={Matt Gardner and Joel Grus and Mark Neumann and Oyvind Tafjord
-    and Pradeep Dasigi and Nelson F. Liu and Matthew Peters and
-    Michael Schmitz and Luke S. Zettlemoyer},
-  year={2017},
-  Eprint = {arXiv:1803.07640},
-}
-```
-
-## Team
-
-AllenNLP is an open-source project backed by [the Allen Institute for Artificial Intelligence (AI2)](https://allenai.org/).
-AI2 is a non-profit institute with the mission to contribute to humanity through high-impact AI research and engineering.
-To learn more about who specifically contributed to this codebase, see [our contributors](https://github.com/allenai/allennlp/graphs/contributors) page.
+如果您想贡献较大的功能，请先创建一个带有提议设计的问题，以便讨论。这样可以
