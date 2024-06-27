@@ -73,8 +73,8 @@ class SimpleGradient(SaliencyInterpreter):
 
         # Register the hooks
         handles = []
-        embedding_layer = self.predictor.get_interpretable_layer()
+        embedding_layer = util.find_embedding_layer(self.predictor._model)
         handles.append(embedding_layer.register_forward_hook(forward_hook))
-        text_field_embedder = self.predictor.get_interpretable_text_field_embedder()
+        text_field_embedder = util.find_text_field_embedder(self.predictor._model)
         handles.append(text_field_embedder.register_forward_hook(get_token_offsets))
         return handles

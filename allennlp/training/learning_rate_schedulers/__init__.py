@@ -17,18 +17,11 @@ a Noam schedule, and a slanted triangular schedule, which are registered as
 
 from allennlp.training.learning_rate_schedulers.learning_rate_scheduler import (
     LearningRateScheduler,
-    ConstantLearningRateScheduler,
-    ConstantWithWarmupLearningRateScheduler,
-    CosineWithWarmupLearningRateScheduler,
-    CosineHardRestartsWithWarmupLearningRateScheduler,
-)
-from allennlp.training.learning_rate_schedulers.pytorch_lr_schedulers import (
     StepLearningRateScheduler,
     MultiStepLearningRateScheduler,
     ExponentialLearningRateScheduler,
     ReduceOnPlateauLearningRateScheduler,
 )
-from allennlp.training.learning_rate_schedulers.combined import CombinedLearningRateScheduler
 from allennlp.training.learning_rate_schedulers.cosine import CosineWithRestarts
 from allennlp.training.learning_rate_schedulers.noam import NoamLR
 from allennlp.training.learning_rate_schedulers.slanted_triangular import SlantedTriangular

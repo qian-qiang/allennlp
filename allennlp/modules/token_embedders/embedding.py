@@ -9,13 +9,13 @@ from typing import Any, cast, Iterator, NamedTuple, Optional, Sequence, Tuple, B
 
 import numpy
 import torch
-
+from overrides import overrides
 from torch.nn.functional import embedding
 
 from allennlp.common import Tqdm
 from allennlp.common.checks import ConfigurationError
 from allennlp.common.file_utils import cached_path, get_file_extension, is_url_or_existing_file
-from allennlp.data.vocabulary import Vocabulary
+from allennlp.data import Vocabulary
 from allennlp.modules.time_distributed import TimeDistributed
 from allennlp.modules.token_embedders.token_embedder import TokenEmbedder
 from allennlp.nn import util
@@ -180,9 +180,11 @@ class Embedding(TokenEmbedder):
         else:
             self._projection = None
 
+    @overrides
     def get_output_dim(self) -> int:
         return self.output_dim
 
+    @overrides
     def forward(self, tokens: torch.Tensor) -> torch.Tensor:
         # tokens may have extra dimensions (batch_size, d1, ..., dn, sequence_length),
         # but embedding expects (batch_size, sequence_length), so pass tokens to
@@ -251,7 +253,7 @@ class Embedding(TokenEmbedder):
         vocab_namespace = vocab_namespace or self._vocab_namespace
         if not vocab_namespace:
             # It's not safe to default to "tokens" or any other namespace.
-            logger.info(
+            logging.info(
                 "Loading a model trained before embedding extension was implemented; "
                 "pass an explicit vocab namespace if you want to extend the vocabulary."
             )
@@ -283,18 +285,19 @@ class Embedding(TokenEmbedder):
         elif is_url_or_existing_file(self._pretrained_file):
             extension_pretrained_file = self._pretrained_file
         # Case 4: no file is available, hope that pretrained embeddings weren't used in the first place and warn
-        elif self._pretrained_file is not None:
-            # Warn here instead of an exception to allow a fine-tuning even without the original pretrained_file
-            logger.warning(
-                f"Embedding at model_path, {model_path} cannot locate the pretrained_file. "
-                f"Originally pretrained_file was at '{self._pretrained_file}'."
-            )
         else:
-            # When loading a model from archive there is no way to distinguish between whether a pretrained-file
-            # was or wasn't used during the original training. So we leave an info here.
-            logger.info(
-                "If you are fine-tuning and want to use a pretrained_file for "
-                "embedding extension, please pass the mapping by --embedding-sources argument."
+            extra_info = (
+                f"Originally pretrained_file was at " f"{self._pretrained_file}. "
+                if self._pretrained_file
+                else ""
+            )
+            # It's better to warn here and not give error because there is no way to distinguish between
+            # whether pretrained-file wasn't used during training or user forgot to pass / passed incorrect
+            # mapping. Raising an error would prevent fine-tuning in the former case.
+            logging.warning(
+                f"Embedding at model_path, {model_path} cannot locate the pretrained_file. "
+                f"{extra_info} If you are fine-tuning and want to use using pretrained_file for "
+                f"embedding extension, please pass the mapping by --embedding-sources argument."
             )
 
         embedding_dim = self.weight.data.shape[-1]
@@ -550,7 +553,7 @@ class EmbeddingsTextFile(Iterator[str]):
                 import bz2
 
                 package = bz2
-            elif extension == ".xz":
+            elif extension == ".lzma":
                 import lzma
 
                 package = lzma

@@ -1,9 +1,10 @@
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional
 import itertools
 
+from overrides import overrides
 
 from allennlp.data.vocabulary import Vocabulary
-from allennlp.data.tokenizers import Token
+from allennlp.data.tokenizers.token import Token
 from allennlp.data.token_indexers.token_indexer import TokenIndexer, IndexedTokenList
 
 
@@ -66,6 +67,7 @@ class SingleIdTokenIndexer(TokenIndexer):
         self._feature_name = feature_name
         self._default_value = default_value
 
+    @overrides
     def count_vocab_items(self, token: Token, counter: Dict[str, Dict[str, int]]):
         if self.namespace is not None:
             text = self._get_feature_value(token)
@@ -73,6 +75,7 @@ class SingleIdTokenIndexer(TokenIndexer):
                 text = text.lower()
             counter[self.namespace][text] += 1
 
+    @overrides
     def tokens_to_indices(
         self, tokens: List[Token], vocabulary: Vocabulary
     ) -> Dict[str, List[int]]:
@@ -90,6 +93,7 @@ class SingleIdTokenIndexer(TokenIndexer):
 
         return {"tokens": indices}
 
+    @overrides
     def get_empty_token_list(self) -> IndexedTokenList:
         return {"tokens": []}
 
@@ -105,14 +109,3 @@ class SingleIdTokenIndexer(TokenIndexer):
                     "constructor of this indexer."
                 )
         return text
-
-    def _to_params(self) -> Dict[str, Any]:
-        return {
-            "namespace": self.namespace,
-            "lowercase_tokens": self.lowercase_tokens,
-            "start_tokens": [t.text for t in self._start_tokens],
-            "end_tokens": [t.text for t in self._end_tokens],
-            "feature_name": self._feature_name,
-            "default_value": self._default_value,
-            "token_min_padding_length": self._token_min_padding_length,
-        }

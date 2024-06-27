@@ -1,6 +1,6 @@
 from typing import List, Dict
 
-
+from overrides import overrides
 import numpy
 
 from allennlp.common.util import JsonDict
@@ -16,7 +16,7 @@ class SentenceTaggerPredictor(Predictor):
     """
     Predictor for any model that takes in a sentence and returns
     a single set of tags for it.  In particular, it can be used with
-    the [`CrfTagger`](https://docs.allennlp.org/models/main/models/tagging/models/crf_tagger/)
+    the [`CrfTagger`](https://docs.allennlp.org/models/master/models/tagging/models/crf_tagger/)
     model and also the [`SimpleTagger`](../models/simple_tagger.md) model.
 
     Registered as a `Predictor` with name "sentence_tagger".
@@ -26,11 +26,12 @@ class SentenceTaggerPredictor(Predictor):
         self, model: Model, dataset_reader: DatasetReader, language: str = "en_core_web_sm"
     ) -> None:
         super().__init__(model, dataset_reader)
-        self._tokenizer = SpacyTokenizer(language=language)
+        self._tokenizer = SpacyTokenizer(language=language, pos_tags=True)
 
     def predict(self, sentence: str) -> JsonDict:
         return self.predict_json({"sentence": sentence})
 
+    @overrides
     def _json_to_instance(self, json_dict: JsonDict) -> Instance:
         """
         Expects JSON that looks like `{"sentence": "..."}`.
@@ -40,6 +41,7 @@ class SentenceTaggerPredictor(Predictor):
         tokens = self._tokenizer.tokenize(sentence)
         return self._dataset_reader.text_to_instance(tokens)
 
+    @overrides
     def predictions_to_labeled_instances(
         self, instance: Instance, outputs: Dict[str, numpy.ndarray]
     ) -> List[Instance]:

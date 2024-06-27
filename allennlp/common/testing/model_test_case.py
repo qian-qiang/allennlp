@@ -16,7 +16,6 @@ from allennlp.data import DataLoader
 from allennlp.data.batch import Batch
 from allennlp.models import load_archive, Model
 from allennlp.training import GradientDescentTrainer
-from allennlp.confidence_checks.normalization_bias_verification import NormalizationBiasVerification
 
 
 class ModelTestCase(AllenNlpTestCase):
@@ -44,7 +43,7 @@ class ModelTestCase(AllenNlpTestCase):
             params["dataset_reader"], serialization_dir=serialization_dir
         )
         # The dataset reader might be lazy, but a lazy list here breaks some of our tests.
-        instances = list(reader.read(str(dataset_file)))
+        instances = reader.read(str(dataset_file))
         # Use parameters for vocabulary if they are present in the config file, so that choices like
         # "non_padded_namespaces", "min_count" etc. can be set if needed.
         if "vocabulary" in params:
@@ -54,19 +53,15 @@ class ModelTestCase(AllenNlpTestCase):
             vocab = Vocabulary.from_instances(instances)
         self.vocab = vocab
         self.instances = instances
+        self.instances.index_with(vocab)
         self.model = Model.from_params(
             vocab=self.vocab, params=params["model"], serialization_dir=serialization_dir
         )
 
         # TODO(joelgrus) get rid of these
         # (a lot of the model tests use them, so they'll have to be changed)
-        self.dataset = Batch(self.instances)
+        self.dataset = Batch(list(self.instances))
         self.dataset.index_instances(self.vocab)
-
-    def test_model_batch_norm_verification(self):
-        if hasattr(self, "model"):  # TODO: can this be done using pytest.skipif?
-            verification = NormalizationBiasVerification(self.model)
-            assert verification.check(inputs=self.dataset.as_tensor_dict())
 
     def ensure_model_can_train_save_and_load(
         self,
@@ -79,8 +74,6 @@ class ModelTestCase(AllenNlpTestCase):
         metric_terminal_value: float = None,
         metric_tolerance: float = 1e-4,
         disable_dropout: bool = True,
-        which_loss: str = "loss",
-        seed: int = None,
     ):
         """
         # Parameters
@@ -115,15 +108,11 @@ class ModelTestCase(AllenNlpTestCase):
         disable_dropout : `bool`, optional (default = `True`)
             If True we will set all dropout to 0 before checking gradients. (Otherwise, with small
             datasets, you may get zero gradients because of unlucky dropout.)
-        which_loss: `str`, optional (default = `"loss"`)
-            Specifies which loss to test. For example, which_loss may be "adversary_loss" for
-            `adversarial_bias_mitigator`.
         """
         save_dir = self.TEST_DIR / "save_and_load_test"
         archive_file = save_dir / "model.tar.gz"
-        model = train_model_from_file(param_file, save_dir, overrides=overrides, return_model=True)
+        model = train_model_from_file(param_file, save_dir, overrides=overrides)
         assert model is not None
-
         metrics_file = save_dir / "metrics.json"
         if metric_to_check is not None:
             metrics = json.loads(metrics_file.read_text())
@@ -148,32 +137,21 @@ class ModelTestCase(AllenNlpTestCase):
         reader = archive.dataset_reader
         params = Params.from_file(param_file, params_overrides=overrides)
 
+        print("Reading with original model")
+        model_dataset = reader.read(params["validation_data_path"])
+        model_dataset.index_with(model.vocab)
+
+        print("Reading with loaded model")
+        loaded_dataset = reader.read(params["validation_data_path"])
+        loaded_dataset.index_with(loaded_model.vocab)
+
         # Need to duplicate params because DataLoader.from_params will consume.
         data_loader_params = params["data_loader"]
         data_loader_params["shuffle"] = False
         data_loader_params2 = Params(copy.deepcopy(data_loader_params.as_dict()))
 
-        if seed is not None:
-            random.seed(seed)
-            numpy.random.seed(seed)
-            torch.manual_seed(seed)
-
-        print("Reading with original model")
-        data_loader = DataLoader.from_params(
-            params=data_loader_params, reader=reader, data_path=params["validation_data_path"]
-        )
-        data_loader.index_with(model.vocab)
-
-        if seed is not None:
-            random.seed(seed)
-            numpy.random.seed(seed)
-            torch.manual_seed(seed)
-
-        print("Reading with loaded model")
-        data_loader2 = DataLoader.from_params(
-            params=data_loader_params2, reader=reader, data_path=params["validation_data_path"]
-        )
-        data_loader2.index_with(loaded_model.vocab)
+        data_loader = DataLoader.from_params(dataset=model_dataset, params=data_loader_params)
+        data_loader2 = DataLoader.from_params(dataset=loaded_dataset, params=data_loader_params2)
 
         # We'll check that even if we index the dataset with each model separately, we still get
         # the same result out.
@@ -184,7 +162,7 @@ class ModelTestCase(AllenNlpTestCase):
         # Check gradients are None for non-trainable parameters and check that
         # trainable parameters receive some gradient if they are trainable.
         self.check_model_computes_gradients_correctly(
-            model, model_batch, gradients_to_ignore, disable_dropout, which_loss
+            model, model_batch, gradients_to_ignore, disable_dropout
         )
 
         # The datasets themselves should be identical.
@@ -215,7 +193,7 @@ class ModelTestCase(AllenNlpTestCase):
         # Check loaded model's loss exists and we can compute gradients, for continuing training.
         loaded_model.train()
         loaded_model_predictions = loaded_model(**loaded_batch)
-        loaded_model_loss = loaded_model_predictions[which_loss]
+        loaded_model_loss = loaded_model_predictions["loss"]
         assert loaded_model_loss is not None
         loaded_model_loss.backward()
 
@@ -315,7 +293,6 @@ class ModelTestCase(AllenNlpTestCase):
         model_batch: Dict[str, Union[Any, Dict[str, Any]]],
         params_to_ignore: Set[str] = None,
         disable_dropout: bool = True,
-        which_loss: str = "loss",
     ):
         print("Checking gradients")
         for p in model.parameters():
@@ -332,7 +309,7 @@ class ModelTestCase(AllenNlpTestCase):
                     setattr(module, "p", 0)
 
         result = model(**model_batch)
-        result[which_loss].backward()
+        result["loss"].backward()
         has_zero_or_none_grads = {}
         for name, parameter in model.named_parameters():
             zeros = torch.zeros(parameter.size())

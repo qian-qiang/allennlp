@@ -1,12 +1,12 @@
 from typing import List, Optional, Union
 
 import torch
+import torch.distributed as dist
+from overrides import overrides
 
-
-from allennlp.common.util import nan_safe_tensor_divide
+from allennlp.common.util import is_distributed
 from allennlp.common.checks import ConfigurationError
 from allennlp.training.metrics.metric import Metric
-from allennlp.nn.util import dist_reduce_sum
 
 
 @Metric.register("fbeta")
@@ -55,7 +55,7 @@ class FBetaMeasure(Metric):
             alters 'macro' to account for label imbalance; it can result in an
             F-score that is not between precision and recall.
 
-    labels : `list`, optional
+    labels: `list`, optional
         The set of labels to include and their order if `average is None`.
         Labels present in the data can be excluded, for example to calculate a
         multi-class average ignoring a majority negative class. Labels not present
@@ -91,6 +91,7 @@ class FBetaMeasure(Metric):
         # Shape: (num_classes, )
         self._true_sum: Union[None, torch.Tensor] = None
 
+    @overrides
     def __call__(
         self,
         predictions: torch.Tensor,
@@ -109,6 +110,7 @@ class FBetaMeasure(Metric):
             A masking tensor the same size as `gold_labels`.
         """
         predictions, gold_labels, mask = self.detach_tensors(predictions, gold_labels, mask)
+        device = gold_labels.device
 
         # Calculate true_positive_sum, true_negative_sum, pred_sum, true_sum
         num_classes = predictions.size(-1)
@@ -162,10 +164,19 @@ class FBetaMeasure(Metric):
 
         self._total_sum += mask.sum().to(torch.float)
 
-        self._true_positive_sum += dist_reduce_sum(true_positive_sum)
-        self._pred_sum += dist_reduce_sum(pred_sum)
-        self._true_sum += dist_reduce_sum(true_sum)
+        if is_distributed():
+            true_positive_sum = torch.tensor(true_positive_sum).to(device)
+            pred_sum = torch.tensor(pred_sum).to(device)
+            true_sum = torch.tensor(true_sum).to(device)
+            dist.all_reduce(true_positive_sum, op=dist.ReduceOp.SUM)
+            dist.all_reduce(pred_sum, op=dist.ReduceOp.SUM)
+            dist.all_reduce(true_sum, op=dist.ReduceOp.SUM)
 
+        self._true_positive_sum += true_positive_sum
+        self._pred_sum += pred_sum
+        self._true_sum += true_sum
+
+    @overrides
     def get_metric(self, reset: bool = False):
         """
         # Returns
@@ -178,7 +189,8 @@ class FBetaMeasure(Metric):
             If `self.average` is not `None`, you will get `float` instead of `List[float]`.
         """
         if self._true_positive_sum is None:
-            raise RuntimeError("You have never called this metric before.")
+            raise RuntimeError("You never call this metric before.")
+
         else:
             tp_sum = self._true_positive_sum
             pred_sum = self._pred_sum
@@ -195,10 +207,10 @@ class FBetaMeasure(Metric):
             pred_sum = pred_sum.sum()  # type: ignore
             true_sum = true_sum.sum()  # type: ignore
 
-        beta2 = self._beta**2
+        beta2 = self._beta ** 2
         # Finally, we have all our sufficient statistics.
-        precision = nan_safe_tensor_divide(tp_sum, pred_sum)
-        recall = nan_safe_tensor_divide(tp_sum, true_sum)
+        precision = _prf_divide(tp_sum, pred_sum)
+        recall = _prf_divide(tp_sum, true_sum)
         fscore = (1 + beta2) * precision * recall / (beta2 * precision + recall)
         fscore[tp_sum == 0] = 0.0
 
@@ -209,9 +221,9 @@ class FBetaMeasure(Metric):
         elif self._average == "weighted":
             weights = true_sum
             weights_sum = true_sum.sum()  # type: ignore
-            precision = nan_safe_tensor_divide((weights * precision).sum(), weights_sum)
-            recall = nan_safe_tensor_divide((weights * recall).sum(), weights_sum)
-            fscore = nan_safe_tensor_divide((weights * fscore).sum(), weights_sum)
+            precision = _prf_divide((weights * precision).sum(), weights_sum)
+            recall = _prf_divide((weights * recall).sum(), weights_sum)
+            fscore = _prf_divide((weights * fscore).sum(), weights_sum)
 
         if reset:
             self.reset()
@@ -225,6 +237,7 @@ class FBetaMeasure(Metric):
         else:
             return {"precision": precision.item(), "recall": recall.item(), "fscore": fscore.item()}
 
+    @overrides
     def reset(self) -> None:
         self._true_positive_sum = None
         self._pred_sum = None
@@ -240,3 +253,18 @@ class FBetaMeasure(Metric):
                 self._total_sum - self._pred_sum - self._true_sum + self._true_positive_sum
             )
             return true_negative_sum
+
+
+def _prf_divide(numerator, denominator):
+    """Performs division and handles divide-by-zero.
+
+    On zero-division, sets the corresponding result elements to zero.
+    """
+    result = numerator / denominator
+    mask = denominator == 0.0
+    if not mask.any():
+        return result
+
+    # remove nan
+    result[mask] = 0.0
+    return result

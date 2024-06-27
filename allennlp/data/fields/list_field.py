@@ -1,5 +1,6 @@
-from typing import Dict, List, Iterator, Sequence, Any
+from typing import Dict, List, Iterator
 
+from overrides import overrides
 
 from allennlp.data.fields.field import DataArray, Field
 from allennlp.data.vocabulary import Vocabulary
@@ -25,13 +26,13 @@ class ListField(SequenceField[DataArray]):
 
     __slots__ = ["field_list"]
 
-    def __init__(self, field_list: Sequence[Field]) -> None:
+    def __init__(self, field_list: List[Field]) -> None:
         field_class_set = {field.__class__ for field in field_list}
         assert (
             len(field_class_set) == 1
         ), "ListFields must contain a single field type, found " + str(field_class_set)
         # Not sure why mypy has a hard time with this type...
-        self.field_list = field_list
+        self.field_list: List[Field] = field_list
 
     # Sequence[Field] methods
     def __iter__(self) -> Iterator[Field]:
@@ -43,14 +44,17 @@ class ListField(SequenceField[DataArray]):
     def __len__(self) -> int:
         return len(self.field_list)
 
+    @overrides
     def count_vocab_items(self, counter: Dict[str, Dict[str, int]]):
         for field in self.field_list:
             field.count_vocab_items(counter)
 
+    @overrides
     def index(self, vocab: Vocabulary):
         for field in self.field_list:
             field.index(vocab)
 
+    @overrides
     def get_padding_lengths(self) -> Dict[str, int]:
         field_lengths = [field.get_padding_lengths() for field in self.field_list]
         padding_lengths = {"num_fields": len(self.field_list)}
@@ -75,9 +79,11 @@ class ListField(SequenceField[DataArray]):
 
         return padding_lengths
 
+    @overrides
     def sequence_length(self) -> int:
         return len(self.field_list)
 
+    @overrides
     def as_tensor(self, padding_lengths: Dict[str, int]) -> DataArray:
         padded_field_list = pad_sequence_to_length(
             self.field_list, padding_lengths["num_fields"], self.field_list[0].empty_field
@@ -92,6 +98,7 @@ class ListField(SequenceField[DataArray]):
         padded_fields = [field.as_tensor(child_padding_lengths) for field in padded_field_list]
         return self.field_list[0].batch_tensors(padded_fields)
 
+    @overrides
     def empty_field(self):
         # Our "empty" list field will actually have a single field in the list, so that we can
         # correctly construct nested lists.  For example, if we have a type that is
@@ -102,6 +109,7 @@ class ListField(SequenceField[DataArray]):
         # anyway.
         return ListField([self.field_list[0].empty_field()])
 
+    @overrides
     def batch_tensors(self, tensor_list: List[DataArray]) -> DataArray:
         # We defer to the class we're wrapping in a list to handle the batching.
         return self.field_list[0].batch_tensors(tensor_list)
@@ -110,6 +118,3 @@ class ListField(SequenceField[DataArray]):
         field_class = self.field_list[0].__class__.__name__
         base_string = f"ListField of {len(self.field_list)} {field_class}s : \n"
         return " ".join([base_string] + [f"\t {field} \n" for field in self.field_list])
-
-    def human_readable_repr(self) -> List[Any]:
-        return [f.human_readable_repr() for f in self.field_list]

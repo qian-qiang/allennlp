@@ -1,0 +1,9 @@
+这个文件 span_utils.py 是 AllenNLP 库的一部分，主要用于处理和操作文本序列中的标注（tags）。具体来说，它提供了一些工具函数，用于从标注序列中提取和转换跨度（spans）。这些函数可以处理不同的标注格式，如 BIO、IOB1、BIOUL 和 BMES。
+以下是文件中主要功能的简要说明：
+1. enumerate_spans: 给定一个句子，返回句子中所有的 token 跨度。可以指定最大和最小跨度宽度，并提供一个过滤函数来决定哪些跨度应该被包含。
+2. bio_tags_to_spans: 从 BIO 标注序列中提取跨度。BIO 标注包括 B（开始）、I（内部）和 O（外部）。
+3. iob1_tags_to_spans: 从 IOB1 标注序列中提取跨度。IOB1 标注包括 I（内部）、O（外部）和 B（开始，紧跟在同类跨度之后）。
+4. bioul_tags_to_spans: 从 BIOUL 标注序列中提取跨度。BIOUL 标注包括 B（开始）、I（内部）、O（外部）、U（单独）和 L（结束）。
+5. iob1_to_bioul 和 to_bioul: 将 IOB1 或 BIO 标注序列转换为 BIOUL 标注序列。
+6. bmes_tags_to_spans: 从 BMES 标注序列中提取跨度。BMES 标注包括 B（开始）、M（中间）、E（结束）和 S（单独）。
+这些工具函数在自然语言处理任务中非常有用，特别是在命名实体识别（NER）等需要处理和转换标注序列的任务中。

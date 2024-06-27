@@ -1,6 +1,5 @@
 import logging
 import os
-import pickle
 
 import pytest
 
@@ -45,7 +44,6 @@ class TestMakeVocabFromParams(AllenNlpTestCase):
                     "validation_data_path": "path-to-validation-file",
                     "test_data_path": "path-to-validation-file",
                     "datasets_for_vocab_creation": [],
-                    "data_loader": {"batch_size": 2},
                 }
             ),
             Params(
@@ -53,7 +51,6 @@ class TestMakeVocabFromParams(AllenNlpTestCase):
                     "dataset_reader": {"type": "train-util-test-reader"},
                     "train_data_path": "path-to-training-file",
                     "datasets_for_vocab_creation": [],
-                    "data_loader": {"batch_size": 2},
                 }
             ),
             Params(
@@ -63,7 +60,6 @@ class TestMakeVocabFromParams(AllenNlpTestCase):
                     "validation_data_path": "path-to-validation-file",
                     "test_data_path": "path-to-validation-file",
                     "vocabulary": {"type": "empty"},
-                    "data_loader": {"batch_size": 2},
                 }
             ),
         ],
@@ -81,7 +77,6 @@ class TestMakeVocabFromParams(AllenNlpTestCase):
             {
                 "dataset_reader": {"type": "train-util-test-reader"},
                 "train_data_path": "path-to-training-file",
-                "data_loader": {"batch_size": 2},
             }
         )
         _ = make_vocab_from_params(params, str(self.TEST_DIR))
@@ -100,7 +95,6 @@ class TestMakeVocabFromParams(AllenNlpTestCase):
                 "train_data_path": "path-to-training-file",
                 "validation_data_path": "path-to-validation-file",
                 "test_data_path": "path-to-test-file",
-                "data_loader": {"batch_size": 2},
             }
         )
         _ = make_vocab_from_params(params, str(self.TEST_DIR))
@@ -120,7 +114,6 @@ class TestMakeVocabFromParams(AllenNlpTestCase):
                 "validation_data_path": "path-to-validation-file",
                 "test_data_path": "path-to-test-file",
                 "datasets_for_vocab_creation": ["train", "validation"],
-                "data_loader": {"batch_size": 2},
             }
         )
         _ = make_vocab_from_params(params, str(self.TEST_DIR))
@@ -139,7 +132,6 @@ class TestMakeVocabFromParams(AllenNlpTestCase):
                 "validation_dataset_reader": {"type": "train-util-test-reader"},
                 "train_data_path": "path-to-training-file",
                 "validation_data_path": "path-to-validation-file",
-                "data_loader": {"batch_size": 2},
             }
         )
         _ = make_vocab_from_params(params, str(self.TEST_DIR))
@@ -153,7 +145,6 @@ class TestMakeVocabFromParams(AllenNlpTestCase):
                 "train_data_path": "path-to-training-file",
                 "validation_data_path": "path-to-validation-file",
                 "datasets_for_vocab_creation": ["train", "validation", "test"],
-                "data_loader": {"batch_size": 2},
             }
         )
         with pytest.raises(ConfigurationError, match="invalid 'datasets_for_vocab_creation' test"):
@@ -165,7 +156,6 @@ class TestMakeVocabFromParams(AllenNlpTestCase):
                 "dataset_reader": {"type": "train-util-test-reader"},
                 "train_data_path": "path-to-training-file",
                 "validation_data_path": "path-to-validation-file",
-                "data_loader": {"batch_size": 2},
             }
         )
         os.makedirs(self.TEST_DIR / "vocabulary")
@@ -192,7 +182,3 @@ class TestMakeVocabFromParams(AllenNlpTestCase):
 
         assert metrics["loss"] == float(total_loss / num_batches)
         assert "batch_loss" not in metrics
-
-    def test_exception_serialization(self):
-        e = ConfigurationError("example")
-        assert {"message": "example"} == vars(pickle.loads(pickle.dumps(e)))

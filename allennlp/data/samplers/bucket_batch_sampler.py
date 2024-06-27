@@ -1,13 +1,14 @@
 import logging
-import math
-from typing import List, Iterable, Tuple, Sequence, Optional
+from typing import List, Iterable, Tuple, Optional
 import random
+import math
+
+from torch.utils import data
 
 from allennlp.common.checks import ConfigurationError
 from allennlp.common.util import lazy_groups_of
 from allennlp.data.instance import Instance
-from allennlp.data.samplers.batch_sampler import BatchSampler
-
+from allennlp.data.samplers import BatchSampler
 
 logger = logging.getLogger(__name__)
 
@@ -29,8 +30,13 @@ class BucketBatchSampler(BatchSampler):
 
     # Parameters
 
+    data_source: `data.Dataset`, required
+        The pytorch `Dataset` of allennlp Instances to bucket.
+
+        In a typical AllenNLP configuration file, this parameter does not get an entry under the
+        "batch_sampler", it gets constructed separately.
     batch_size : `int`, required
-        The size of each batch of instances yielded when calling the data_loader.
+        The size of each batch of instances yielded when calling the dataloader.
 
     sorting_keys : `List[str]`, optional
         To bucket inputs into batches, we want to group the instances by padding length, so that we
@@ -42,7 +48,7 @@ class BucketBatchSampler(BatchSampler):
         padding keys and seeing which one has the longest length.  We use that one for padding.
         This should give reasonable results in most cases. Some cases where it might not be the
         right thing to do are when you have a `ListField[TextField]`, or when you have a really
-        long, constant length `TensorField`.
+        long, constant length `ArrayField`.
 
         When you need to specify this yourself, you can create an instance from your dataset and
         call `Instance.get_padding_lengths()` to see a list of all keys used in your data.  You
@@ -57,27 +63,23 @@ class BucketBatchSampler(BatchSampler):
         If `True`, the sampler will drop the last batch if
         its size would be less than batch_size`.
 
-    shuffle : `bool`, (default = `True`)
-        If `False`, the sampler won't shuffle the batches. `padding_noise` will be ignored and set
-        to `0.0`.
-
     """
 
     def __init__(
         self,
+        data_source: data.Dataset,
         batch_size: int,
         sorting_keys: List[str] = None,
         padding_noise: float = 0.1,
         drop_last: bool = False,
-        shuffle: bool = True,
     ):
+
+        self.vocab = data_source.vocab
         self.sorting_keys = sorting_keys
         self.padding_noise = padding_noise
         self.batch_size = batch_size
+        self.data_source = data_source
         self.drop_last = drop_last
-        self.shuffle = shuffle
-        if not shuffle:
-            self.padding_noise = 0.0
 
     def _argsort_by_padding(
         self, instances: Iterable[Instance]
@@ -113,16 +115,15 @@ class BucketBatchSampler(BatchSampler):
             [instance_with_index[0][1] for instance_with_index in with_indices],
         )
 
-    def get_batch_indices(self, instances: Sequence[Instance]) -> Iterable[List[int]]:
-        indices, _ = self._argsort_by_padding(instances)
+    def __iter__(self) -> Iterable[List[int]]:
+        indices, _ = self._argsort_by_padding(self.data_source)
         batches = []
         for group in lazy_groups_of(indices, self.batch_size):
             batch_indices = list(group)
             if self.drop_last and len(batch_indices) < self.batch_size:
                 continue
             batches.append(batch_indices)
-        if self.shuffle:
-            random.shuffle(batches)
+        random.shuffle(batches)
         for batch in batches:
             yield batch
 
@@ -143,6 +144,7 @@ class BucketBatchSampler(BatchSampler):
         max_length = 0.0
         longest_field: Optional[str] = None
         for i, instance in enumerate(instances):
+            instance.index_fields(self.vocab)
             for field_name, field in instance.fields.items():
                 length = len(field)
                 if length > max_length:
@@ -161,12 +163,9 @@ class BucketBatchSampler(BatchSampler):
             )
         self.sorting_keys = [longest_field]
 
-    def get_num_batches(self, instances: Sequence[Instance]) -> int:
-        batch_count_float = len(instances) / self.batch_size
+    def __len__(self):
+        batch_count_float = len(self.data_source) / self.batch_size
         if self.drop_last:
             return math.floor(batch_count_float)
         else:
             return math.ceil(batch_count_float)
-
-    def get_batch_size(self) -> Optional[int]:
-        return self.batch_size

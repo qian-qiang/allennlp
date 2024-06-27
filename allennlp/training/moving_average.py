@@ -1,4 +1,4 @@
-from typing import Iterable, Tuple, Optional, Any, Dict
+from typing import Iterable, Tuple, Optional
 
 import torch
 
@@ -41,14 +41,6 @@ class MovingAverage(Registrable):
         for name, parameter in self._parameters:
             parameter.data.copy_(self._backups[name])
 
-    def state_dict(self) -> Dict[str, Any]:
-        return {"parameters": self._parameters, "shadows": self._shadows, "backups": self._backups}
-
-    def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
-        self._parameters = state_dict["parameters"]
-        self._shadows = state_dict["shadows"]
-        self._backups = state_dict["backups"]
-
 
 @MovingAverage.register("exponential")
 class ExponentialMovingAverage(MovingAverage):
@@ -60,9 +52,10 @@ class ExponentialMovingAverage(MovingAverage):
     # Parameters
 
     parameters : `Iterable[Tuple[str, Parameter]]`, required
-        The parameters whose averages we'll be tracking. In a typical AllenNLP configuration
-        file, this argument does not get an entry under the "moving_average", it gets passed
-        in separately.
+        The parameters whose averages we'll be tracking.
+
+        In a typical AllenNLP configuration file, this argument does not get an entry under the
+        "moving_average", it gets passed in separately.
     decay : `float`, optional (default = `0.9999`)
         The decay rate that will be used if `num_updates` is not passed
         (and that will be used as an upper bound if `num_updates` is passed).

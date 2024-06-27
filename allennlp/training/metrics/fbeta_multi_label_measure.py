@@ -1,11 +1,13 @@
 from typing import List, Optional
 
 import torch
+import torch.distributed as dist
+from overrides import overrides
 
-
+from allennlp.common.checks import ConfigurationError
+from allennlp.common.util import is_distributed
 from allennlp.training.metrics import FBetaMeasure
 from allennlp.training.metrics.metric import Metric
-from allennlp.nn.util import dist_reduce_sum
 
 
 @Metric.register("fbeta_multi_label")
@@ -61,9 +63,7 @@ class FBetaMultiLabelMeasure(FBetaMeasure):
         in the data will result in 0 components in a macro or weighted average.
 
     threshold: `float`, optional (default = `0.5`)
-        Probabilities over this threshold will be considered predictions for the corresponding class.
-        Note that you can also use this metric with logits, in which case it would make more sense to set
-        the `threshold` value to `0.0`.
+        Logits over this threshold will be considered predictions for the corresponding class.
 
     """
 
@@ -77,6 +77,7 @@ class FBetaMultiLabelMeasure(FBetaMeasure):
         super().__init__(beta, average, labels)
         self._threshold = threshold
 
+    @overrides
     def __call__(
         self,
         predictions: torch.Tensor,
@@ -89,15 +90,21 @@ class FBetaMultiLabelMeasure(FBetaMeasure):
         predictions : `torch.Tensor`, required.
             A tensor of predictions of shape (batch_size, ..., num_classes).
         gold_labels : `torch.Tensor`, required.
-            A tensor of boolean labels of shape (batch_size, ..., num_classes). It must be the same
-            shape as the `predictions`.
+            A tensor of integer class label of shape (batch_size, ...). It must be the same
+            shape as the `predictions` tensor without the `num_classes` dimension.
         mask : `torch.BoolTensor`, optional (default = `None`).
             A masking tensor the same size as `gold_labels`.
         """
         predictions, gold_labels, mask = self.detach_tensors(predictions, gold_labels, mask)
+        device = gold_labels.device
 
         # Calculate true_positive_sum, true_negative_sum, pred_sum, true_sum
         num_classes = predictions.size(-1)
+        if (gold_labels >= num_classes).any():
+            raise ConfigurationError(
+                "A gold label passed to FBetaMeasure contains "
+                f"an id >= {num_classes}, the number of classes."
+            )
 
         # It means we call this metric at the first time
         # when `self._true_positive_sum` is None.
@@ -108,15 +115,17 @@ class FBetaMultiLabelMeasure(FBetaMeasure):
             self._total_sum = torch.zeros(num_classes, device=predictions.device)
 
         if mask is None:
-            mask = torch.ones_like(gold_labels, dtype=torch.bool)
+            mask = torch.ones_like(gold_labels).bool()
         gold_labels = gold_labels.float()
 
         # If the prediction tensor is all zeros, the record is not classified to any of the labels.
         pred_mask = (predictions.sum(dim=-1) != 0).unsqueeze(-1)
         threshold_predictions = (predictions >= self._threshold).float()
 
-        class_indices = torch.arange(num_classes, device=predictions.device).repeat(
-            gold_labels.shape[:-1] + (1,)
+        class_indices = (
+            torch.arange(num_classes, device=predictions.device)
+            .unsqueeze(0)
+            .repeat(gold_labels.size(0), 1)
         )
         true_positives = (gold_labels * threshold_predictions).bool() & mask & pred_mask
         true_positives_bins = class_indices[true_positives]
@@ -146,9 +155,17 @@ class FBetaMultiLabelMeasure(FBetaMeasure):
 
         self._total_sum += mask.expand_as(gold_labels).sum().to(torch.float)
 
-        self._true_positive_sum += dist_reduce_sum(true_positive_sum)
-        self._pred_sum += dist_reduce_sum(pred_sum)
-        self._true_sum += dist_reduce_sum(true_sum)
+        if is_distributed():
+            true_positive_sum = torch.tensor(true_positive_sum).to(device)
+            pred_sum = torch.tensor(pred_sum).to(device)
+            true_sum = torch.tensor(true_sum).to(device)
+            dist.all_reduce(true_positive_sum, op=dist.ReduceOp.SUM)
+            dist.all_reduce(pred_sum, op=dist.ReduceOp.SUM)
+            dist.all_reduce(true_sum, op=dist.ReduceOp.SUM)
+
+        self._true_positive_sum += true_positive_sum
+        self._pred_sum += pred_sum
+        self._true_sum += true_sum
 
     @property
     def _true_negative_sum(self):

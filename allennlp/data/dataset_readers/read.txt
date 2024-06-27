@@ -1,0 +1,16 @@
+conll2003.py 读取的是 CoNLL-2003 格式的数据集，通常用于命名实体识别（NER）、词性标注（POS）和分块标注（Chunking）。每行包含一个单词及其对应的标签，句子之间用空行分隔。
+babi.py 读取的是 bAbI 数据集，通常用于阅读理解和问答任务。bAbI 数据集由 Facebook 提供，包含一系列的故事和问题，每个故事由多个句子组成。
+dataset_reader.py：这是一个通用的 DatasetReader 基类，定义了如何从文件中读取数据集并将其转换为 Instance 对象。它提供了缓存、分布式处理、多进程处理等功能。
+interleaving_dataset_reader.py：这个文件定义了一个 InterleavingDatasetReader 类，它可以包装多个其他数据集读取器，并交错它们的实例。它还会添加一个 MetadataField 来指示每个实例的来源。
+equence_tagging.py：用于读取预标记的序列标注数据集。每行数据包含单词和标签对，适用于序列标注任务，如命名实体识别（NER）或词性标注（POS）sequence_tagging.py：每行数据格式为 WORD###TAG [TAB] WORD###TAG [TAB] ...，其中 WORD 和 TAG 由分隔符分开。
+sharded_dataset_reader.py:包装了另一个数据集读取器，并使用它从多个输入文件中读取数据。它支持分布式读取，并确保在分布式环境中每个工作节点读取不同的文件片段。支持从多个文件或归档文件（如 .zip 或 .tar.gz）中读取数据。
+ext_classification_json.py：用于文本分类任务。它读取包含文本和标签的JSON文件，并将其转换为适合模型训练的实例。输入是包含“text”和“label”字段的JSON文件。
+
+数据预处理，繁琐无聊但又少不了，而Allennlp让我们只关注于核心的数据读取，通用的东西早已封装好，核心的逻辑一个都逃不了，比如在DatasetReader我们只需要实现两个函数：_read , text_to_instance，
+即可完成数据预处理整个流程，其他的比如build_vocabulary, idx2word, word2idx, get_vocab_size等都帮我们做袅，就问你这个工具棒不棒，妙不妙。
+
+别以为_read和text_to_instance函数逻辑有多复杂，其实再简单不过了：
+
+1.从本地读取数据
+2.从数据中读取相关数据字段
+3.将提取的数据转化成Instance数组

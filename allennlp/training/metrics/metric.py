@@ -1,4 +1,4 @@
-from typing import Iterable, Optional
+from typing import Dict, Iterable, Optional, Any
 
 import torch
 
@@ -29,7 +29,7 @@ class Metric(Registrable):
         """
         raise NotImplementedError
 
-    def get_metric(self, reset: bool):
+    def get_metric(self, reset: bool) -> Dict[str, Any]:
         """
         Compute and return the metric. Optionally also call `self.reset`.
         """

@@ -3,6 +3,7 @@ Various utilities that don't fit anywhere else.
 """
 import hashlib
 import io
+import pickle
 from datetime import timedelta
 import importlib
 import json
@@ -11,7 +12,6 @@ import os
 import pkgutil
 import random
 import sys
-import signal
 from contextlib import contextmanager
 from itertools import islice, zip_longest
 from pathlib import Path
@@ -27,18 +27,14 @@ from typing import (
     Tuple,
     TypeVar,
     Union,
-    Sequence,
-    Set,
 )
 
-import dill
 import numpy
 import spacy
 import torch
 import torch.distributed as dist
 from spacy.cli.download import download as spacy_download
 from spacy.language import Language as SpacyModelType
-import base58
 
 from allennlp.common.checks import log_pytorch_version_info
 from allennlp.common.params import Params
@@ -73,7 +69,7 @@ def sanitize(x: Any) -> Any:
     can be serialized into JSON.
     """
     # Import here to avoid circular references
-    from allennlp.data.tokenizers import Token
+    from allennlp.data.tokenizers.token import Token
 
     if isinstance(x, (str, float, int, bool)):
         # x is already serializable
@@ -96,8 +92,8 @@ def sanitize(x: Any) -> Any:
     elif isinstance(x, (spacy.tokens.Token, Token)):
         # Tokens get sanitized to just their text.
         return x.text
-    elif isinstance(x, (list, tuple, set)):
-        # Lists, tuples, and sets need their values sanitized
+    elif isinstance(x, (list, tuple)):
+        # Lists and Tuples need their values sanitized
         return [sanitize(x_i) for x_i in x]
     elif x is None:
         return "None"
@@ -147,7 +143,7 @@ def lazy_groups_of(iterable: Iterable[A], group_size: int) -> Iterator[List[A]]:
 
 
 def pad_sequence_to_length(
-    sequence: Sequence,
+    sequence: List,
     desired_length: int,
     default_value: Callable[[], Any] = lambda: 0,
     padding_on_right: bool = True,
@@ -178,7 +174,6 @@ def pad_sequence_to_length(
 
     padded_sequence : `List`
     """
-    sequence = list(sequence)
     # Truncates the sequence to the desired length.
     if padding_on_right:
         padded_sequence = sequence[:desired_length]
@@ -259,7 +254,7 @@ LOADED_SPACY_MODELS: Dict[Tuple[str, bool, bool, bool], SpacyModelType] = {}
 
 
 def get_spacy_model(
-    spacy_model_name: str, pos_tags: bool = True, parse: bool = False, ner: bool = False
+    spacy_model_name: str, pos_tags: bool, parse: bool, ner: bool
 ) -> SpacyModelType:
     """
     In order to avoid loading spacy models a whole bunch of times, we'll save references to them,
@@ -331,24 +326,13 @@ def push_python_path(path: PathType) -> ContextManagerFunctionReturnType[None]:
         sys.path.remove(path)
 
 
-def import_module_and_submodules(package_name: str, exclude: Optional[Set[str]] = None) -> None:
+def import_module_and_submodules(package_name: str) -> None:
     """
-    Import all public submodules under the given package.
+    Import all submodules under the given package.
     Primarily useful so that people using AllenNLP as a library
     can specify their own custom packages and have their custom
     classes get loaded and registered.
     """
-    # take care of None
-    exclude = exclude if exclude else set()
-    try:
-        import checklist  # noqa
-    except ImportError:
-        # exclude modules that depends on checklist being present
-        exclude |= {"allennlp.confidence_checks.task_checklists"}
-
-    if package_name in exclude:
-        return
-
     importlib.invalidate_caches()
 
     # For some reason, python doesn't always add this by default to your path, but you pretty much
@@ -364,16 +348,10 @@ def import_module_and_submodules(package_name: str, exclude: Optional[Set[str]] 
         for module_finder, name, _ in pkgutil.walk_packages(path):
             # Sometimes when you import third-party libraries that are on your path,
             # `pkgutil.walk_packages` returns those too, so we need to skip them.
-            if path_string and module_finder.path != path_string:  # type: ignore[union-attr]
-                continue
-            if name.startswith("_"):
-                # skip directly importing private subpackages
-                continue
-            if name.startswith("test"):
-                # as long as allennlp.common.testing is not under tests/, exclude it
+            if path_string and module_finder.path != path_string:
                 continue
             subpackage = f"{package_name}.{name}"
-            import_module_and_submodules(subpackage, exclude=exclude)
+            import_module_and_submodules(subpackage)
 
 
 def peak_cpu_memory() -> Dict[int, int]:
@@ -434,14 +412,12 @@ def peak_gpu_memory() -> Dict[int, int]:
     if not torch.cuda.is_available():
         return {}
 
-    device = torch.cuda.current_device()
-
-    results_dict: Dict[int, int] = {}
     if is_distributed():
         # If the backend is not 'nccl', we're training on CPU.
         if dist.get_backend() != "nccl":
             return {}
 
+        device = torch.cuda.current_device()
         global_rank = dist.get_rank()
         world_size = dist.get_world_size()
         peak_bytes = torch.cuda.max_memory_allocated(device)
@@ -451,15 +427,13 @@ def peak_gpu_memory() -> Dict[int, int]:
 
         dist.all_gather(gather_results, peak_bytes_tensor)
 
+        results_dict: Dict[int, int] = {}
         for peak_bytes_tensor in gather_results:
             results_dict[int(peak_bytes_tensor[0])] = int(peak_bytes_tensor[1])
+
+        return results_dict
     else:
-        results_dict = {0: torch.cuda.max_memory_allocated()}
-
-    # Reset peak stats.
-    torch.cuda.reset_max_memory_allocated(device)
-
-    return results_dict
+        return {0: torch.cuda.max_memory_allocated()}
 
 
 def ensure_list(iterable: Iterable[A]) -> List[A]:
@@ -531,18 +505,6 @@ def is_distributed() -> bool:
     Checks if the distributed process group is available and has been initialized
     """
     return dist.is_available() and dist.is_initialized()
-
-
-def is_global_primary() -> bool:
-    """
-    Checks if the distributed process group is the global primary (rank = 0).
-    If the distributed process group is not available or has not been initialized,
-    this trivially returns `True`.
-    """
-    if not is_distributed():
-        return True
-    else:
-        return dist.get_rank() == 0
 
 
 def sanitize_wordpiece(wordpiece: str) -> str:
@@ -679,80 +641,10 @@ def format_size(size: int) -> str:
     return f"{size}B"
 
 
-def nan_safe_tensor_divide(numerator, denominator):
-    """Performs division and handles divide-by-zero.
-
-    On zero-division, sets the corresponding result elements to zero.
-    """
-    result = numerator / denominator
-    mask = denominator == 0.0
-    if not mask.any():
-        return result
-
-    # remove nan
-    result[mask] = 0.0
-    return result
-
-
-def shuffle_iterable(i: Iterable[T], pool_size: int = 1024) -> Iterable[T]:
-    import random
-
-    i = iter(i)
-    pool = []
-
-    # fill up the pool
-    for item in i:
-        pool.append(item)
-        if len(pool) >= pool_size:
-            break
-
-    # play in it
-    while len(pool) > 0:
-        index = random.randrange(len(pool))
-        yield pool[index]
-        try:
-            pool[index] = next(i)
-        except StopIteration:
-            del pool[index]
-            break
-
-    # drain it
-    random.shuffle(pool)
-    yield from pool
-
-
-def cycle_iterator_function(iterator_function: Callable[[], Iterable[T]]) -> Iterator[T]:
-    """
-    Functionally equivalent to `itertools.cycle(iterator_function())`, but this function does not
-    cache the result of calling the iterator like `cycle` does.  Instead, we just call
-    `iterator_function()` again whenever we get a `StopIteration`.  This should only be preferred
-    over `itertools.cycle` in cases where you're sure you don't want the caching behavior that's
-    done in `itertools.cycle`.
-    """
-    iterator = iter(iterator_function())
-    while True:
-        try:
-            yield next(iterator)
-        except StopIteration:
-            iterator = iter(iterator_function())
-
-
 def hash_object(o: Any) -> str:
-    """Returns a character hash code of arbitrary Python objects."""
+    """Returns a 32-character hash code of arbitrary Python objects."""
     m = hashlib.blake2b()
     with io.BytesIO() as buffer:
-        dill.dump(o, buffer)
+        pickle.dump(o, buffer)
         m.update(buffer.getbuffer())
-        return base58.b58encode(m.digest()).decode()
-
-
-class SigTermReceived(Exception):
-    pass
-
-
-def _handle_sigterm(sig, frame):
-    raise SigTermReceived
-
-
-def install_sigterm_handler():
-    signal.signal(signal.SIGTERM, _handle_sigterm)
+        return m.hexdigest()

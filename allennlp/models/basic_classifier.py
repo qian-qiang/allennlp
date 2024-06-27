@@ -1,10 +1,9 @@
 from typing import Dict, Optional
 
-
+from overrides import overrides
 import torch
 
 from allennlp.data import TextFieldTensors, Vocabulary
-from allennlp.data.fields import MetadataField
 from allennlp.models.model import Model
 from allennlp.modules import FeedForward, Seq2SeqEncoder, Seq2VecEncoder, TextFieldEmbedder
 from allennlp.nn import InitializerApplicator, util
@@ -42,8 +41,6 @@ class BasicClassifier(Model):
     num_labels : `int`, optional (default = `None`)
         Number of labels to project to in classification layer. By default, the classification layer will
         project to the size of the vocabulary namespace corresponding to labels.
-    namespace : `str`, optional (default = `"tokens"`)
-        Vocabulary namespace corresponding to the input text. By default, we use the "tokens" namespace.
     label_namespace : `str`, optional (default = `"labels"`)
         Vocabulary namespace corresponding to labels. By default, we use the "labels" namespace.
     initializer : `InitializerApplicator`, optional (default=`InitializerApplicator()`)
@@ -92,10 +89,7 @@ class BasicClassifier(Model):
         initializer(self)
 
     def forward(  # type: ignore
-        self,
-        tokens: TextFieldTensors,
-        label: torch.IntTensor = None,
-        metadata: MetadataField = None,
+        self, tokens: TextFieldTensors, label: torch.IntTensor = None
     ) -> Dict[str, torch.Tensor]:
 
         """
@@ -145,6 +139,7 @@ class BasicClassifier(Model):
 
         return output_dict
 
+    @overrides
     def make_output_human_readable(
         self, output_dict: Dict[str, torch.Tensor]
     ) -> Dict[str, torch.Tensor]:
@@ -181,3 +176,4 @@ class BasicClassifier(Model):
         return metrics
 
     default_predictor = "text_classifier"
+

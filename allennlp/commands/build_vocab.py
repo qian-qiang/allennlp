@@ -9,6 +9,7 @@ import os
 import tarfile
 import tempfile
 
+from overrides import overrides
 
 from allennlp.commands.subcommand import Subcommand
 from allennlp.common.file_utils import CacheFile
@@ -21,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 @Subcommand.register("build-vocab")
 class BuildVocab(Subcommand):
+    @overrides
     def add_subparser(self, parser: argparse._SubParsersAction) -> argparse.ArgumentParser:
         description = """Build a vocabulary from an experiment config file."""
         subparser = parser.add_parser(self.name, description=description, help=description)
@@ -63,8 +65,7 @@ def build_vocab_from_args(args: argparse.Namespace):
         raise RuntimeError(f"{args.output_path} already exists. Use --force to overwrite.")
 
     output_directory = os.path.dirname(args.output_path)
-    if len(output_directory) > 0:
-        os.makedirs(output_directory, exist_ok=True)
+    os.makedirs(output_directory, exist_ok=True)
 
     params = Params.from_file(args.param_path)
 

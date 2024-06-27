@@ -1,3 +1,4 @@
+from overrides import overrides
 import torch
 from torch.nn.parameter import Parameter
 
@@ -12,8 +13,7 @@ class AdditiveAttention(Attention):
     `x` and the matrix `y` is computed as `V tanh(Wx + Uy)`.
 
     This attention is often referred as concat or additive attention. It was introduced in
-    [Neural Machine Translation by Jointly Learning to Align and Translate (Bahdanau et al, 2015)]
-    (https://api.semanticscholar.org/CorpusID:11212020).
+    <https://arxiv.org/abs/1409.0473> by Bahdanau et al.
 
     Registered as an `Attention` with name "additive".
 
@@ -44,6 +44,7 @@ class AdditiveAttention(Attention):
         torch.nn.init.xavier_uniform_(self._u_matrix)
         torch.nn.init.xavier_uniform_(self._v_vector)
 
+    @overrides
     def _forward_internal(self, vector: torch.Tensor, matrix: torch.Tensor) -> torch.Tensor:
         intermediate = vector.matmul(self._w_matrix).unsqueeze(1) + matrix.matmul(self._u_matrix)
         intermediate = torch.tanh(intermediate)

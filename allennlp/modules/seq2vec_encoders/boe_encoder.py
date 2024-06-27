@@ -1,3 +1,5 @@
+from overrides import overrides
+
 import torch
 
 from allennlp.modules.seq2vec_encoders.seq2vec_encoder import Seq2VecEncoder
@@ -28,9 +30,11 @@ class BagOfEmbeddingsEncoder(Seq2VecEncoder):
         self._embedding_dim = embedding_dim
         self._averaged = averaged
 
+    @overrides
     def get_input_dim(self) -> int:
         return self._embedding_dim
 
+    @overrides
     def get_output_dim(self) -> int:
         return self._embedding_dim
 

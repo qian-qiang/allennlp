@@ -7,27 +7,27 @@ as named arguments to the constructor.
 
 The available initialization functions are
 
-* ["normal"](https://pytorch.org/docs/master/nn.init.html?highlight=uniform#torch.nn.init.normal_)
-* ["uniform"](https://pytorch.org/docs/master/nn.init.html?highlight=orthogonal#torch.nn.init.uniform_)
-* ["constant"](https://pytorch.org/docs/master/nn.init.html?highlight=orthogonal#torch.nn.init.constant_)
-* ["eye"](https://pytorch.org/docs/master/nn.init.html?highlight=orthogonal#torch.nn.init.eye_)
-* ["dirac"](https://pytorch.org/docs/master/nn.init.html?highlight=orthogonal#torch.nn.init.dirac_)
-* ["xavier_uniform"](https://pytorch.org/docs/master/nn.init.html?highlight=orthogonal#torch.nn.init.xavier_uniform_)
-* ["xavier_normal"](https://pytorch.org/docs/master/nn.init.html?highlight=orthogonal#torch.nn.init.xavier_normal_)
-* ["kaiming_uniform"](https://pytorch.org/docs/master/nn.init.html?highlight=orthogonal#torch.nn.init.kaiming_uniform_)
-* ["kaiming_normal"](https://pytorch.org/docs/master/nn.init.html?highlight=orthogonal#torch.nn.init.kaiming_normal_)
-* ["orthogonal"](https://pytorch.org/docs/master/nn.init.html?highlight=orthogonal#torch.nn.init.orthogonal_)
-* ["sparse"](https://pytorch.org/docs/master/nn.init.html?highlight=orthogonal#torch.nn.init.sparse_)
+* ["normal"](https://pytorch.org/docs/master/nn.html?highlight=orthogonal#torch.nn.init.normal_)
+* ["uniform"](https://pytorch.org/docs/master/nn.html?highlight=orthogonal#torch.nn.init.uniform_)
+* ["constant"](https://pytorch.org/docs/master/nn.html?highlight=orthogonal#torch.nn.init.constant_)
+* ["eye"](https://pytorch.org/docs/master/nn.html?highlight=orthogonal#torch.nn.init.eye_)
+* ["dirac"](https://pytorch.org/docs/master/nn.html?highlight=orthogonal#torch.nn.init.dirac_)
+* ["xavier_uniform"](https://pytorch.org/docs/master/nn.html?highlight=orthogonal#torch.nn.init.xavier_uniform_)
+* ["xavier_normal"](https://pytorch.org/docs/master/nn.html?highlight=orthogonal#torch.nn.init.xavier_normal_)
+* ["kaiming_uniform"](https://pytorch.org/docs/master/nn.html?highlight=orthogonal#torch.nn.init.kaiming_uniform_)
+* ["kaiming_normal"](https://pytorch.org/docs/master/nn.html?highlight=orthogonal#torch.nn.init.kaiming_normal_)
+* ["orthogonal"](https://pytorch.org/docs/master/nn.html?highlight=orthogonal#torch.nn.init.orthogonal_)
+* ["sparse"](https://pytorch.org/docs/master/nn.html?highlight=orthogonal#torch.nn.init.sparse_)
 * ["block_orthogonal"](./initializers.md#block_orthogonal)
 * ["uniform_unit_scaling"](./initializers.md#uniform_unit_scaling)
-* ["pretrained"](./initializers.md#pretrainedmodelinitializer)
-"""  # noqa: E501
+* ["pretrained"](./initializers.md#PretrainedModelInitializer)
+"""
 import logging
 import re
 import math
 from typing import Callable, List, Tuple, Dict
 import itertools
-
+from overrides import overrides
 import tarfile
 
 import torch
@@ -399,6 +399,7 @@ class PretrainedModelInitializer(Initializer):
 
         self.parameter_name_overrides = parameter_name_overrides or {}
 
+    @overrides
     def __call__(self, tensor: torch.Tensor, parameter_name: str, **kwargs) -> None:  # type: ignore
         # Select the new parameter name if it's being overridden
         if parameter_name in self.parameter_name_overrides:

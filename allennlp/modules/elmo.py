@@ -5,16 +5,14 @@ from typing import Any, Dict, List, Union
 
 import numpy
 import torch
-
+from overrides import overrides
 from torch.nn.modules import Dropout
 
 from allennlp.common import FromParams
 from allennlp.common.checks import ConfigurationError
 from allennlp.common.file_utils import cached_path
 from allennlp.common.util import lazy_groups_of
-from allennlp.data.instance import Instance
-from allennlp.data.tokenizers.token_class import Token
-from allennlp.data.vocabulary import Vocabulary
+from allennlp.data import Instance, Token, Vocabulary
 from allennlp.data.batch import Batch
 from allennlp.data.fields import TextField
 from allennlp.data.token_indexers.elmo_indexer import (
@@ -313,6 +311,7 @@ class _ElmoCharacterEncoder(torch.nn.Module):
     def get_output_dim(self):
         return self.output_dim
 
+    @overrides
     def forward(self, inputs: torch.Tensor) -> Dict[str, torch.Tensor]:
         """
         Compute context insensitive token embeddings for ELMo representations.
@@ -441,7 +440,7 @@ class _ElmoCharacterEncoder(torch.nn.Module):
         # create the layers, and load the weights
         self._highways = Highway(n_filters, n_highway, activation=torch.nn.functional.relu)
         for k in range(n_highway):
-            # The AllenNLP highway is one matrix multiplication with concatenation of
+            # The AllenNLP highway is one matrix multplication with concatenation of
             # transform and carry weights.
             with h5py.File(cached_path(self._weight_file), "r") as fin:
                 # The weights are transposed due to multiplication order assumptions in tf

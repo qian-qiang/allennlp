@@ -76,7 +76,7 @@ class TestSampledSoftmaxLoss(AllenNlpTestCase):
         # bias out the unsampled terms:
         for i in range(10000):
             if i not in FAKE_SAMPLES:
-                unsampled_softmax.softmax_b.data[i] = -10000
+                unsampled_softmax.softmax_b[i] = -10000
 
         # set weights equal, use transpose because opposite shapes
         sampled_softmax.softmax_w.data = unsampled_softmax.softmax_w.t()
@@ -95,4 +95,4 @@ class TestSampledSoftmaxLoss(AllenNlpTestCase):
         # Should be close
 
         pct_error = (sampled_loss - full_loss) / full_loss
-        assert abs(pct_error) < 0.0003
+        assert abs(pct_error) < 0.001

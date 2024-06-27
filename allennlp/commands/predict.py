@@ -3,18 +3,19 @@ The `predict` subcommand allows you to make bulk JSON-to-JSON
 or dataset to JSON predictions using a trained model and its
 [`Predictor`](../predictors/predictor.md#predictor) wrapper.
 """
+
 from typing import List, Iterator, Optional
 import argparse
 import sys
 import json
 
+from overrides import overrides
 
 from allennlp.commands.subcommand import Subcommand
 from allennlp.common import logging as common_logging
 from allennlp.common.checks import check_for_gpu, ConfigurationError
-from allennlp.common.file_utils import cached_path, open_compressed
+from allennlp.common.file_utils import cached_path
 from allennlp.common.util import lazy_groups_of
-from allennlp.data.dataset_readers import MultiTaskDatasetReader
 from allennlp.models.archival import load_archive
 from allennlp.predictors.predictor import Predictor, JsonDict
 from allennlp.data import Instance
@@ -22,6 +23,7 @@ from allennlp.data import Instance
 
 @Subcommand.register("predict")
 class Predict(Subcommand):
+    @overrides
     def add_subparser(self, parser: argparse._SubParsersAction) -> argparse.ArgumentParser:
 
         description = """Run the specified model against a JSON-lines input file."""
@@ -72,14 +74,6 @@ class Predict(Subcommand):
         )
 
         subparser.add_argument(
-            "--multitask-head",
-            type=str,
-            default=None,
-            help="If you are using a dataset reader to make predictions, and the model is a"
-            "multitask model, you have to specify the name of the model head to use here.",
-        )
-
-        subparser.add_argument(
             "-o",
             "--overrides",
             type=str,
@@ -93,15 +87,6 @@ class Predict(Subcommand):
 
         subparser.add_argument(
             "--predictor", type=str, help="optionally specify a specific predictor to use"
-        )
-
-        subparser.add_argument(
-            "--predictor-args",
-            type=str,
-            default="",
-            help=(
-                "an optional JSON structure used to provide additional parameters to the predictor"
-            ),
         )
 
         subparser.add_argument(
@@ -125,19 +110,8 @@ def _get_predictor(args: argparse.Namespace) -> Predictor:
         overrides=args.overrides,
     )
 
-    predictor_args = args.predictor_args.strip()
-    if len(predictor_args) <= 0:
-        predictor_args = {}
-    else:
-        import json
-
-        predictor_args = json.loads(predictor_args)
-
     return Predictor.from_archive(
-        archive,
-        args.predictor,
-        dataset_reader_to_load=args.dataset_reader_choice,
-        extra_args=predictor_args,
+        archive, args.predictor, dataset_reader_to_load=args.dataset_reader_choice
     )
 
 
@@ -150,31 +124,14 @@ class _PredictManager:
         batch_size: int,
         print_to_console: bool,
         has_dataset_reader: bool,
-        multitask_head: Optional[str] = None,
     ) -> None:
+
         self._predictor = predictor
         self._input_file = input_file
         self._output_file = None if output_file is None else open(output_file, "w")
         self._batch_size = batch_size
         self._print_to_console = print_to_console
         self._dataset_reader = None if not has_dataset_reader else predictor._dataset_reader
-        self._multitask_head = multitask_head
-        if self._multitask_head is not None:
-            if self._dataset_reader is None:
-                raise ConfigurationError(
-                    "You must use a dataset reader when using --multitask-head."
-                )
-            if not isinstance(self._dataset_reader, MultiTaskDatasetReader):
-                raise ConfigurationError(
-                    "--multitask-head only works with a multitask dataset reader."
-                )
-        if (
-            isinstance(self._dataset_reader, MultiTaskDatasetReader)
-            and self._multitask_head is None
-        ):
-            raise ConfigurationError(
-                "You must specify --multitask-head when using a multitask dataset reader."
-            )
 
     def _predict_json(self, batch_data: List[JsonDict]) -> Iterator[str]:
         if len(batch_data) == 1:
@@ -209,7 +166,7 @@ class _PredictManager:
                     yield self._predictor.load_line(line)
         else:
             input_file = cached_path(self._input_file)
-            with open_compressed(input_file) as file_input:
+            with open(input_file, "r") as file_input:
                 for line in file_input:
                     if not line.isspace():
                         yield self._predictor.load_line(line)
@@ -220,15 +177,7 @@ class _PredictManager:
         elif self._dataset_reader is None:
             raise ConfigurationError("To generate instances directly, pass a DatasetReader.")
         else:
-            if isinstance(self._dataset_reader, MultiTaskDatasetReader):
-                assert (
-                    self._multitask_head is not None
-                )  # This is properly checked by the constructor.
-                yield from self._dataset_reader.read(
-                    self._input_file, force_task=self._multitask_head
-                )
-            else:
-                yield from self._dataset_reader.read(self._input_file)
+            yield from self._dataset_reader.read(self._input_file)
 
     def run(self) -> None:
         has_reader = self._dataset_reader is not None
@@ -267,6 +216,5 @@ def _predict(args: argparse.Namespace) -> None:
         args.batch_size,
         not args.silent,
         args.use_dataset_reader,
-        args.multitask_head,
     )
     manager.run()

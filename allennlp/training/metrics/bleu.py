@@ -1,13 +1,13 @@
 from collections import Counter
 import math
-from typing import Iterable, Tuple, Dict, Set, Optional
+from typing import Iterable, Tuple, Dict, Set
 
+from overrides import overrides
 import torch
 import torch.distributed as dist
 
 from allennlp.common.util import is_distributed
 from allennlp.training.metrics.metric import Metric
-from allennlp.nn.util import dist_reduce_sum
 
 
 @Metric.register("bleu")
@@ -55,6 +55,7 @@ class BLEU(Metric):
         self._prediction_lengths = 0
         self._reference_lengths = 0
 
+    @overrides
     def reset(self) -> None:
         self._precision_matches = Counter()
         self._precision_totals = Counter()
@@ -96,11 +97,11 @@ class BLEU(Metric):
             return 0.0
         return math.exp(1.0 - self._reference_lengths / self._prediction_lengths)
 
+    @overrides
     def __call__(
         self,  # type: ignore
         predictions: torch.LongTensor,
         gold_targets: torch.LongTensor,
-        mask: Optional[torch.BoolTensor] = None,
     ) -> None:
         """
         Update precision counts.
@@ -116,22 +117,25 @@ class BLEU(Metric):
 
         None
         """
-        if mask is not None:
-            raise NotImplementedError("This metric does not support a mask.")
-
         predictions, gold_targets = self.detach_tensors(predictions, gold_targets)
+        device = gold_targets.device
         if is_distributed():
             world_size = dist.get_world_size()
-        else:
-            world_size = 1
 
         for ngram_size, _ in enumerate(self._ngram_weights, start=1):
             precision_matches, precision_totals = self._get_modified_precision_counts(
                 predictions, gold_targets, ngram_size
             )
+            if is_distributed():
+                _precision_matches = torch.tensor(precision_matches).to(device)
+                _precision_totals = torch.tensor(precision_totals).to(device)
+                dist.all_reduce(_precision_matches, op=dist.ReduceOp.SUM)
+                dist.all_reduce(_precision_totals, op=dist.ReduceOp.SUM)
+                precision_matches = _precision_matches.item() / world_size
+                precision_totals = _precision_totals.item() / world_size
 
-            self._precision_matches[ngram_size] += dist_reduce_sum(precision_matches) / world_size
-            self._precision_totals[ngram_size] += dist_reduce_sum(precision_totals) / world_size
+            self._precision_matches[ngram_size] += precision_matches
+            self._precision_totals[ngram_size] += precision_totals
 
         if not self._exclude_indices:
             _prediction_lengths = predictions.size(0) * predictions.size(1)
@@ -145,9 +149,18 @@ class BLEU(Metric):
             _prediction_lengths = valid_predictions_mask.sum().item()
             _reference_lengths = valid_gold_targets_mask.sum().item()
 
-        self._prediction_lengths += dist_reduce_sum(_prediction_lengths)
-        self._reference_lengths += dist_reduce_sum(_reference_lengths)
+        if is_distributed():
+            prediction_lengths = torch.tensor(_prediction_lengths).to(device)
+            reference_lengths = torch.tensor(_reference_lengths).to(device)
+            dist.all_reduce(prediction_lengths, op=dist.ReduceOp.SUM)
+            dist.all_reduce(reference_lengths, op=dist.ReduceOp.SUM)
+            _prediction_lengths = prediction_lengths.item()
+            _reference_lengths = reference_lengths.item()
 
+        self._prediction_lengths += _prediction_lengths
+        self._reference_lengths += _reference_lengths
+
+    @overrides
     def get_metric(self, reset: bool = False) -> Dict[str, float]:
 
         brevity_penalty = self._get_brevity_penalty()

@@ -677,7 +677,7 @@ class TestVocabulary(AllenNlpTestCase):
 
         # Reading from a single (compressed) file or a single-file archive
         base_path = str(self.FIXTURES_ROOT / "embeddings/fake_embeddings.5d.txt")
-        for ext in ["", ".gz", ".xz", ".bz2", ".zip", ".tar.gz"]:
+        for ext in ["", ".gz", ".lzma", ".bz2", ".zip", ".tar.gz"]:
             file_path = base_path + ext
             words_read = set(_read_pretrained_tokens(file_path))
             assert words_read == words, (
@@ -700,7 +700,7 @@ class TestVocabulary(AllenNlpTestCase):
             )
 
     def test_from_instances_exclusive_embeddings_file_inside_archive(self):
-        """Just for ensuring there are no problems when reading pretrained tokens from an archive"""
+        """ Just for ensuring there are no problems when reading pretrained tokens from an archive """
         # Read embeddings file from archive
         archive_path = str(self.TEST_DIR / "embeddings-archive.zip")
 
@@ -839,22 +839,6 @@ class TestVocabulary(AllenNlpTestCase):
         assert vocab1.get_token_to_index_vocabulary("2") == {"d": 0, "e": 1, "f": 2}
         assert vocab1.get_token_to_index_vocabulary("3") == {"g": 0, "h": 1, "i": 2}
 
-    def test_extend_helper(self):
-        vocab = Vocabulary()
-        counter = {"a": {}, "b": {"test": 0}, "c": {"test": 1}}
-        min_count = {"c": -1, "d": 0}
-
-        with pytest.raises(ConfigurationError):
-            vocab._extend(counter, min_count)
-        with pytest.raises(ConfigurationError):
-            vocab._extend(None, min_count)
-
-        counter["d"] = {}
-        try:
-            vocab._extend(counter, min_count)
-        except ConfigurationError:
-            pytest.fail("Unexpected ConfigurationError")
-
 
 class TestVocabularyFromFilesWithArchive(AllenNlpTestCase):
     def setup_method(self):
@@ -889,111 +873,3 @@ class TestVocabularyFromFilesWithArchive(AllenNlpTestCase):
         vocab = Vocabulary.from_files(str(self.model_archive))
         vocab.get_namespaces() == {"tokens", "labels"}
         assert vocab.get_token_from_index(3, namespace="tokens") == "u.n."
-
-
-class TestVocabularyFromPretrainedTransformer(AllenNlpTestCase):
-    @pytest.mark.parametrize("model_name", ["bert-base-cased", "roberta-base"])
-    def test_from_pretrained_transformer(self, model_name):
-        namespace = "tokens"
-        from allennlp.common import cached_transformers
-
-        tokenizer = cached_transformers.get_tokenizer(model_name)
-
-        vocab = Vocabulary.from_pretrained_transformer(model_name, namespace=namespace)
-        assert vocab._token_to_index[namespace] == tokenizer.get_vocab()
-        vocab.save_to_files(self.TEST_DIR / "vocab")
-
-        vocab1 = Vocabulary.from_files(self.TEST_DIR / "vocab")
-        assert vocab1._token_to_index[namespace] == tokenizer.get_vocab()
-
-
-class TestVocabularyFromPretrainedTransformerAndInstances(AllenNlpTestCase):
-    def setup_method(self):
-        super().setup_method()
-
-        # Create dataset with single namespace
-        token_indexer_1 = SingleIdTokenIndexer("namespace_1")
-        text_field_1 = TextField(
-            [Token(t) for t in ["a", "a", "a", "a", "b", "b", "c", "c", "c"]],
-            {"namespace_1": token_indexer_1},
-        )
-        single_field_instance = Instance({"text": text_field_1})
-        self.single_namespace_dataset = Batch([single_field_instance])
-
-        # Create dataset with multiple namespaces
-        token_indexer_2 = SingleIdTokenIndexer("namespace_2")
-        text_field_2 = TextField(
-            [Token(t) for t in ["d", "d", "d", "d", "e", "e", "f", "f", "f"]],
-            {"namespace_2": token_indexer_2},
-        )
-        multiple_field_instance = Instance(
-            {"first_text": text_field_1, "second_text": text_field_2}
-        )
-        self.multiple_namespace_dataset = Batch([multiple_field_instance])
-
-    @staticmethod
-    def _get_expected_vocab(dataset, namespace, model_name):
-        vocab_from_instances = Vocabulary.from_instances(dataset)
-        instance_tokens = set(vocab_from_instances._token_to_index[namespace].keys())
-        transformer_tokens = set(
-            Vocabulary.from_pretrained_transformer(model_name, namespace)
-            ._token_to_index[namespace]
-            .keys()
-        )
-        return instance_tokens.union(transformer_tokens)
-
-    def _get_expected_vocab_size(self, dataset, namespace, model_name):
-        return len(self._get_expected_vocab(dataset, namespace, model_name))
-
-    @pytest.mark.parametrize("model_name", ["bert-base-cased", "roberta-base"])
-    def test_with_single_namespace_and_single_model(self, model_name):
-        dataset = self.single_namespace_dataset
-        namespace = "namespace_1"
-
-        expected_vocab_size = self._get_expected_vocab_size(dataset, namespace, model_name)
-
-        vocab = Vocabulary.from_pretrained_transformer_and_instances(
-            dataset, {namespace: model_name}
-        )
-
-        assert vocab.get_vocab_size(namespace) == expected_vocab_size
-
-    @pytest.mark.parametrize("model_name", ["bert-base-cased", "roberta-base"])
-    def test_only_updates_single_namespace_when_multiple_present(self, model_name):
-        dataset = self.multiple_namespace_dataset
-        namespace1 = "namespace_1"
-        namespace2 = "namespace_2"
-
-        namespace1_vocab_size = self._get_expected_vocab_size(dataset, namespace1, model_name)
-        namespace2_vocab_size = Vocabulary.from_instances(dataset).get_vocab_size("namespace_2")
-
-        vocab = Vocabulary.from_pretrained_transformer_and_instances(
-            dataset, {namespace1: model_name}
-        )
-
-        # Make sure only the desired namespace is extended
-        assert vocab.get_vocab_size(namespace1) == namespace1_vocab_size
-        assert vocab.get_vocab_size(namespace2) == namespace2_vocab_size
-
-    @pytest.mark.parametrize("namespace1_model_name", ["bert-base-cased", "roberta-base"])
-    @pytest.mark.parametrize("namespace2_model_name", ["bert-base-cased", "roberta-base"])
-    def test_with_different_models_per_namespace(
-        self, namespace1_model_name, namespace2_model_name
-    ):
-        dataset = self.multiple_namespace_dataset
-        namespace1 = "namespace_1"
-        namespace2 = "namespace_2"
-
-        namespace1_vocab_size = self._get_expected_vocab_size(
-            dataset, namespace1, namespace1_model_name
-        )
-        namespace2_vocab_size = self._get_expected_vocab_size(
-            dataset, namespace2, namespace2_model_name
-        )
-
-        vocab = Vocabulary.from_pretrained_transformer_and_instances(
-            dataset, {namespace1: namespace1_model_name, namespace2: namespace2_model_name}
-        )
-
-        assert vocab.get_vocab_size(namespace1) == namespace1_vocab_size
-        assert vocab.get_vocab_size(namespace2) == namespace2_vocab_size

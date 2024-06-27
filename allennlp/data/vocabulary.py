@@ -11,16 +11,17 @@ import re
 from collections import defaultdict
 from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Union, TYPE_CHECKING
 
-from transformers import PreTrainedTokenizer
+from filelock import FileLock
 
 from allennlp.common import Registrable
-from allennlp.common.file_utils import cached_path, FileLock
+from allennlp.common.file_utils import cached_path
 from allennlp.common.checks import ConfigurationError
 from allennlp.common.tqdm import Tqdm
 from allennlp.common.util import namespace_match
 
 if TYPE_CHECKING:
     from allennlp.data import instance as adi  # noqa
+
 
 logger = logging.getLogger(__name__)
 
@@ -194,24 +195,17 @@ class Vocabulary(Registrable):
         in the Vocabulary.
 
     min_pretrained_embeddings : `Dict[str, int]`, optional
-        Specifies for each namespace a minimum number of lines (typically the
+        If provided, specifies for each namespace a minimum number of lines (typically the
         most common words) to keep from pretrained embedding files, even for words not
-        appearing in the data. By default the minimum number of lines to keep is 0.
-        You can automatically include all lines for a namespace by setting the minimum number of lines
-        to `-1`.
+        appearing in the data.
 
     only_include_pretrained_words : `bool`, optional (default=`False`)
         This defines the strategy for using any pretrained embedding files which may have been
-        specified in `pretrained_files`.
-
-        If `False`, we use an inclusive strategy and include both words in the `counter`
-        that have a count of at least `min_count` and words from the pretrained file
-        that are within the first `N` lines defined by `min_pretrained_embeddings`.
-
-        If `True`, we use an exclusive strategy where words are only included in the `Vocabulary`
-        if they are in the pretrained embedding file. Their count must also be at least `min_count`
-        or they must be listed in the embedding file within the first `N` lines defined
-        by `min_pretrained_embeddings`.
+        specified in `pretrained_files`. If False, an inclusive strategy is used: and words
+        which are in the `counter` and in the pretrained file are added to the `Vocabulary`,
+        regardless of whether their count exceeds `min_count` or not. If True, we use an
+        exclusive strategy: words are only included in the Vocabulary if they are in the pretrained
+        embedding file (their count must still be at least `min_count`).
 
     tokens_to_add : `Dict[str, List[str]]`, optional (default=`None`)
         If given, this is a list of tokens to add to the vocabulary, keyed by the namespace to add
@@ -266,26 +260,6 @@ class Vocabulary(Registrable):
             tokens_to_add,
             min_pretrained_embeddings,
         )
-
-    @classmethod
-    def from_pretrained_transformer(
-        cls, model_name: str, namespace: str = "tokens", oov_token: Optional[str] = None
-    ) -> "Vocabulary":
-        """
-        Initialize a vocabulary from the vocabulary of a pretrained transformer model.
-        If `oov_token` is not given, we will try to infer it from the transformer tokenizer.
-        """
-        from allennlp.common import cached_transformers
-
-        tokenizer = cached_transformers.get_tokenizer(model_name)
-        if oov_token is None:
-            if hasattr(tokenizer, "_unk_token"):
-                oov_token = tokenizer._unk_token
-            elif hasattr(tokenizer, "special_tokens_map"):
-                oov_token = tokenizer.special_tokens_map.get("unk_token")
-        vocab = cls(non_padded_namespaces=[namespace], oov_token=oov_token)
-        vocab.add_transformer_vocab(tokenizer, namespace)
-        return vocab
 
     @classmethod
     def from_instances(
@@ -364,7 +338,7 @@ class Vocabulary(Registrable):
 
         # We use a lock file to avoid race conditions where multiple processes
         # might be reading/writing from/to the same vocab files at once.
-        with FileLock(os.path.join(directory, ".lock"), read_only_ok=True):
+        with FileLock(os.path.join(directory, ".lock")):
             with codecs.open(
                 os.path.join(directory, NAMESPACE_PADDING_FILE), "r", "utf-8"
             ) as namespace_file:
@@ -432,77 +406,6 @@ class Vocabulary(Registrable):
         return vocab
 
     @classmethod
-    def from_pretrained_transformer_and_instances(
-        cls,
-        instances: Iterable["adi.Instance"],
-        transformers: Dict[str, str],
-        min_count: Dict[str, int] = None,
-        max_vocab_size: Union[int, Dict[str, int]] = None,
-        non_padded_namespaces: Iterable[str] = DEFAULT_NON_PADDED_NAMESPACES,
-        pretrained_files: Optional[Dict[str, str]] = None,
-        only_include_pretrained_words: bool = False,
-        tokens_to_add: Dict[str, List[str]] = None,
-        min_pretrained_embeddings: Dict[str, int] = None,
-        padding_token: Optional[str] = DEFAULT_PADDING_TOKEN,
-        oov_token: Optional[str] = DEFAULT_OOV_TOKEN,
-    ) -> "Vocabulary":
-        """
-        Construct a vocabulary given a collection of `Instance`'s and some parameters. Then extends
-        it with generated vocabularies from pretrained transformers.
-
-        Vocabulary from instances is constructed by passing parameters to :func:`from_instances`,
-        and then updated by including merging in vocabularies from
-        :func:`from_pretrained_transformer`. See other methods for full descriptions for what the
-        other parameters do.
-
-        The `instances` parameters does not get an entry in a typical AllenNLP configuration file,
-        other parameters do (if you want non-default parameters).
-
-        # Parameters
-
-        transformers : `Dict[str, str]`
-            Dictionary mapping the vocab namespaces (keys) to a transformer model name (value).
-            Namespaces not included will be ignored.
-
-        # Examples
-
-        You can use this constructor by modifying the following example within your training
-        configuration.
-
-        ```jsonnet
-        {
-            vocabulary: {
-                type: 'from_pretrained_transformer_and_instances',
-                transformers: {
-                    'namespace1': 'bert-base-cased',
-                    'namespace2': 'roberta-base',
-                },
-            }
-        }
-        ```
-        """
-        vocab = cls.from_instances(
-            instances=instances,
-            min_count=min_count,
-            max_vocab_size=max_vocab_size,
-            non_padded_namespaces=non_padded_namespaces,
-            pretrained_files=pretrained_files,
-            only_include_pretrained_words=only_include_pretrained_words,
-            tokens_to_add=tokens_to_add,
-            min_pretrained_embeddings=min_pretrained_embeddings,
-            padding_token=padding_token,
-            oov_token=oov_token,
-        )
-
-        for namespace, model_name in transformers.items():
-            transformer_vocab = cls.from_pretrained_transformer(
-                model_name=model_name, namespace=namespace
-            )
-            vocab.extend_from_vocab(transformer_vocab)
-
-        return vocab
-
-    @classmethod
     def empty(cls) -> "Vocabulary":
         """
         This method returns a bare vocabulary instantiated with `cls()` (so, `Vocabulary()` if you
@@ -515,25 +418,6 @@ class Vocabulary(Registrable):
         through the data.
         """
         return cls()
-
-    def add_transformer_vocab(
-        self, tokenizer: PreTrainedTokenizer, namespace: str = "tokens"
-    ) -> None:
-        """
-        Copies tokens from a transformer tokenizer's vocab into the given namespace.
-        """
-        try:
-            vocab_items = tokenizer.get_vocab().items()
-        except NotImplementedError:
-            vocab_items = (
-                (tokenizer.convert_ids_to_tokens(idx), idx) for idx in range(tokenizer.vocab_size)
-            )
-
-        for word, idx in vocab_items:
-            self._token_to_index[namespace][word] = idx
-            self._index_to_token[namespace][idx] = word
-
-        self._non_padded_namespaces.add(namespace)
 
     def set_from_file(
         self,
@@ -627,13 +511,6 @@ class Vocabulary(Registrable):
         mappings of calling vocabulary will be retained.  It is an inplace operation so None will be
         returned.
         """
-        if min_count is not None:
-            for key in min_count:
-                if counter is not None and key not in counter or counter is None:
-                    raise ConfigurationError(
-                        f"The key '{key}' is present in min_count but not in counter"
-                    )
-
         if not isinstance(max_vocab_size, dict):
             int_max_vocab_size = max_vocab_size
             max_vocab_size = defaultdict(lambda: int_max_vocab_size)  # type: ignore
@@ -675,13 +552,9 @@ class Vocabulary(Registrable):
             if namespace in pretrained_files:
                 pretrained_list = _read_pretrained_tokens(pretrained_files[namespace])
                 min_embeddings = min_pretrained_embeddings.get(namespace, 0)
-                if min_embeddings > 0 or min_embeddings == -1:
+                if min_embeddings > 0:
                     tokens_old = tokens_to_add.get(namespace, [])
-                    tokens_new = (
-                        pretrained_list
-                        if min_embeddings == -1
-                        else pretrained_list[:min_embeddings]
-                    )
+                    tokens_new = pretrained_list[:min_embeddings]
                     tokens_to_add[namespace] = tokens_old + tokens_new
                 pretrained_set = set(pretrained_list)
             token_counts = list(counter[namespace].items())
@@ -890,13 +763,6 @@ class Vocabulary(Registrable):
 
 # We can't decorate `Vocabulary` with `Vocabulary.register()`, because `Vocabulary` hasn't been
 # defined yet.  So we put these down here.
-Vocabulary.register("from_pretrained_transformer", constructor="from_pretrained_transformer")(
-    Vocabulary
-)
-Vocabulary.register(
-    "from_pretrained_transformer_and_instances",
-    constructor="from_pretrained_transformer_and_instances",
-)(Vocabulary)
 Vocabulary.register("from_instances", constructor="from_instances")(Vocabulary)
 Vocabulary.register("from_files", constructor="from_files")(Vocabulary)
 Vocabulary.register("extend", constructor="from_files_and_instances")(Vocabulary)

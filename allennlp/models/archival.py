@@ -2,23 +2,20 @@
 Helper functions for archiving models and restoring archived models.
 """
 from os import PathLike
-from pathlib import Path
-from typing import Tuple, NamedTuple, Union, Dict, Any, List, Optional
+from typing import NamedTuple, Union, Dict, Any, List, Optional
 import logging
 import os
 import tempfile
 import tarfile
 import shutil
+from pathlib import Path
 from contextlib import contextmanager
 import glob
-import warnings
 
 from torch.nn import Module
 
-from allennlp.version import VERSION, _MAJOR, _MINOR, _PATCH
 from allennlp.common.checks import ConfigurationError
 from allennlp.common.file_utils import cached_path
-from allennlp.common.meta import Meta, META_NAME
 from allennlp.common.params import Params
 from allennlp.data.dataset_readers import DatasetReader
 from allennlp.models.model import Model, _DEFAULT_WEIGHTS
@@ -27,13 +24,12 @@ logger = logging.getLogger(__name__)
 
 
 class Archive(NamedTuple):
-    """An archive comprises a Model and its experimental config"""
+    """ An archive comprises a Model and its experimental config"""
 
     model: Model
     config: Params
     dataset_reader: DatasetReader
     validation_dataset_reader: DatasetReader
-    meta: Optional[Meta]
 
     def extract_module(self, path: str, freeze: bool = True) -> Module:
         """
@@ -95,13 +91,12 @@ class Archive(NamedTuple):
 # These constants are the *known names* under which we archive them.
 CONFIG_NAME = "config.json"
 _WEIGHTS_NAME = "weights.th"
-_VERSION_TUPLE = (_MAJOR, _MINOR, _PATCH)
 
 
 def verify_include_in_archive(include_in_archive: Optional[List[str]] = None):
     if include_in_archive is None:
         return
-    saved_names = [CONFIG_NAME, _WEIGHTS_NAME, _DEFAULT_WEIGHTS, META_NAME, "vocabulary"]
+    saved_names = [CONFIG_NAME, _WEIGHTS_NAME, _DEFAULT_WEIGHTS, "vocabulary"]
     for archival_target in include_in_archive:
         if archival_target in saved_names:
             raise ConfigurationError(
@@ -114,7 +109,7 @@ def archive_model(
     weights: str = _DEFAULT_WEIGHTS,
     archive_path: Union[str, PathLike] = None,
     include_in_archive: Optional[List[str]] = None,
-) -> str:
+) -> None:
     """
     Archive the model weights, its training configuration, and its vocabulary to `model.tar.gz`.
 
@@ -130,28 +125,15 @@ def archive_model(
         to "model.tar.gz" inside the directory.
     include_in_archive : `List[str]`, optional, (default = `None`)
         Paths relative to `serialization_dir` that should be archived in addition to the default ones.
-
-    # Returns
-
-    The final archive path.
     """
-    extra_copy_of_weights_just_for_mypy = Path(weights)
-    if extra_copy_of_weights_just_for_mypy.is_absolute():
-        weights_file = extra_copy_of_weights_just_for_mypy
-    else:
-        weights_file = Path(serialization_dir) / extra_copy_of_weights_just_for_mypy
+    weights_file = os.path.join(serialization_dir, weights)
     if not os.path.exists(weights_file):
-        err_msg = f"weights file '{weights_file}' does not exist, unable to archive model"
-        logger.error(err_msg)
-        raise RuntimeError(err_msg)
+        logger.error("weights file %s does not exist, unable to archive model", weights_file)
+        return
 
     config_file = os.path.join(serialization_dir, CONFIG_NAME)
     if not os.path.exists(config_file):
-        err_msg = f"config file '{config_file}' does not exist, unable to archive model"
-        logger.error(err_msg)
-        raise RuntimeError(err_msg)
-
-    meta_file = os.path.join(serialization_dir, META_NAME)
+        logger.error("config file %s does not exist, unable to archive model", config_file)
 
     if archive_path is not None:
         archive_file = archive_path
@@ -159,16 +141,11 @@ def archive_model(
             archive_file = os.path.join(archive_file, "model.tar.gz")
     else:
         archive_file = os.path.join(serialization_dir, "model.tar.gz")
-
     logger.info("archiving weights and vocabulary to %s", archive_file)
     with tarfile.open(archive_file, "w:gz") as archive:
         archive.add(config_file, arcname=CONFIG_NAME)
         archive.add(weights_file, arcname=_WEIGHTS_NAME)
         archive.add(os.path.join(serialization_dir, "vocabulary"), arcname="vocabulary")
-        if os.path.exists(meta_file):
-            archive.add(meta_file, arcname=META_NAME)
-        else:
-            logger.warning("meta file %s does not exist", meta_file)
 
         if include_in_archive is not None:
             for archival_target in include_in_archive:
@@ -178,11 +155,9 @@ def archive_model(
                         arcname = path[len(os.path.join(serialization_dir, "")) :]
                         archive.add(path, arcname=arcname)
 
-    return str(archive_file)
-
 
 def load_archive(
-    archive_file: Union[str, PathLike],
+    archive_file: Union[str, Path],
     cuda_device: int = -1,
     overrides: Union[str, Dict[str, Any]] = "",
     weights_file: str = None,
@@ -192,7 +167,7 @@ def load_archive(
 
     # Parameters
 
-    archive_file : `Union[str, PathLike]`
+    archive_file : `Union[str, Path]`
         The archive file to load the model from.
     cuda_device : `int`, optional (default = `-1`)
         If `cuda_device` is >= 0, the model will be loaded onto the
@@ -209,8 +184,6 @@ def load_archive(
         logger.info(f"loading archive file {archive_file}")
     else:
         logger.info(f"loading archive file {archive_file} from cache at {resolved_archive_file}")
-
-    meta: Optional[Meta] = None
 
     tempdir = None
     try:
@@ -233,26 +206,16 @@ def load_archive(
             config.duplicate(), serialization_dir
         )
         model = _load_model(config.duplicate(), weights_path, serialization_dir, cuda_device)
-
-        # Load meta.
-        meta_path = os.path.join(serialization_dir, META_NAME)
-        if os.path.exists(meta_path):
-            meta = Meta.from_path(meta_path)
     finally:
         if tempdir is not None:
             logger.info(f"removing temporary unarchived model dir at {tempdir}")
             shutil.rmtree(tempdir, ignore_errors=True)
-
-    # Check version compatibility.
-    if meta is not None:
-        _check_version_compatibility(archive_file, meta)
 
     return Archive(
         model=model,
         config=config,
         dataset_reader=dataset_reader,
         validation_dataset_reader=validation_dataset_reader,
-        meta=meta,
     )
 
 
@@ -305,33 +268,3 @@ def extracted_archive(resolved_archive_file, cleanup=True):
         if tempdir is not None and cleanup:
             logger.info(f"removing temporary unarchived model dir at {tempdir}")
             shutil.rmtree(tempdir, ignore_errors=True)
-
-
-def _parse_version(version: str) -> Tuple[str, str, str]:
-    """
-    Parse a version string into a (major, minor, patch).
-    """
-    try:
-        major, minor, patch = version.split(".")[:3]
-    except ValueError:
-        raise ValueError(f"Invalid version '{version}', unable to parse")
-    return (major, minor, patch)
-
-
-def _check_version_compatibility(archive_file: Union[PathLike, str], meta: Meta):
-    meta_version_tuple = _parse_version(meta.version)
-    # Warn if current version is behind the version the model was trained on.
-    if _VERSION_TUPLE < meta_version_tuple:
-        warnings.warn(
-            f"The model {archive_file} was trained on a newer version of AllenNLP (v{meta.version}), "
-            f"but you're using version {VERSION}.",
-            UserWarning,
-        )
-    # Warn if major versions differ since there is no guarantee of backwards
-    # compatibility across major releases.
-    elif _VERSION_TUPLE[0] != meta_version_tuple[0]:
-        warnings.warn(
-            f"The model {archive_file} was trained on version {meta.version} of AllenNLP, "
-            f"but you're using {VERSION} which may not be compatible.",
-            UserWarning,
-        )

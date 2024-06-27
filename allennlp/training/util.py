@@ -7,22 +7,28 @@ import os
 import shutil
 import json
 from os import PathLike
-from typing import Any, Dict, Iterable, Optional, Union, Tuple, Set, List
+from typing import Any, Dict, Iterable, Optional, Union, Tuple, Set, List, TYPE_CHECKING
 from collections import Counter
 
 import torch
+
+# import torch.distributed as dist
+from torch.utils.data import DataLoader
 from torch.nn.utils import clip_grad_norm_
 
 from allennlp.common.checks import check_for_gpu, ConfigurationError
 from allennlp.common.params import Params
 from allennlp.common.tqdm import Tqdm
-from allennlp.common.util import dump_metrics, sanitize, int_to_device
-from allennlp.data import Instance, Vocabulary, Batch, DataLoader
+from allennlp.common.util import dump_metrics, sanitize
+from allennlp.data import Instance, Vocabulary, Batch
 from allennlp.data.dataset_readers import DatasetReader
 from allennlp.models.archival import CONFIG_NAME
 from allennlp.models.model import Model
 from allennlp.nn import util as nn_util
 
+if TYPE_CHECKING:
+    from allennlp.data import AllennlpDataset
+    from allennlp.data import AllennlpLazyDataset
 
 logger = logging.getLogger(__name__)
 
@@ -84,42 +90,73 @@ def str_to_time(time_str: str) -> datetime.datetime:
     return datetime.datetime(*pieces)
 
 
-def data_loaders_from_params(
+def read_all_datasets(
+    train_data_path: str,
+    dataset_reader: DatasetReader,
+    validation_dataset_reader: DatasetReader = None,
+    validation_data_path: str = None,
+    test_data_path: str = None,
+) -> Dict[str, Union["AllennlpDataset", "AllennlpLazyDataset"]]:
+    """
+    Reads all datasets (perhaps lazily, if the corresponding dataset readers are lazy) and returns a
+    dictionary mapping dataset name ("train", "validation" or "test") to the iterable resulting from
+    `reader.read(filename)`.
+    """
+
+    logger.info("Reading training data from %s", train_data_path)
+    train_data = dataset_reader.read(train_data_path)
+
+    datasets = {"train": train_data}
+
+    validation_dataset_reader = validation_dataset_reader or dataset_reader
+
+    if validation_data_path is not None:
+        logger.info("Reading validation data from %s", validation_data_path)
+        validation_data = validation_dataset_reader.read(validation_data_path)
+        datasets["validation"] = validation_data
+
+    if test_data_path is not None:
+        logger.info("Reading test data from %s", test_data_path)
+        test_data = validation_dataset_reader.read(test_data_path)
+        datasets["test"] = test_data
+
+    return datasets
+
+
+def datasets_from_params(
     params: Params,
     train: bool = True,
     validation: bool = True,
     test: bool = True,
     serialization_dir: Optional[Union[str, PathLike]] = None,
-) -> Dict[str, DataLoader]:
+) -> Dict[str, Union["AllennlpDataset", "AllennlpLazyDataset"]]:
     """
-    Instantiate data loaders specified by the config.
+    Load datasets specified by the config.
     """
-    data_loaders: Dict[str, DataLoader] = {}
+    datasets: Dict[str, Union["AllennlpDataset", "AllennlpLazyDataset"]] = {}
 
     train = train and ("train_data_path" in params)
     validation = validation and ("validation_data_path" in params)
     test = test and ("test_data_path" in params)
     if not any((train, validation, test)):
         # Return early so don't unnecessarily initialize the train data reader.
-        return data_loaders
+        return datasets
 
     dataset_reader_params = params.pop("dataset_reader")
     dataset_reader = DatasetReader.from_params(
         dataset_reader_params, serialization_dir=serialization_dir
     )
-    data_loader_params = params.pop("data_loader")
 
     if train:
         train_data_path = params.pop("train_data_path")
         logger.info("Reading training data from %s", train_data_path)
-        data_loaders["train"] = DataLoader.from_params(
-            data_loader_params.duplicate(), reader=dataset_reader, data_path=train_data_path
-        )
+        train_data = dataset_reader.read(train_data_path)
+        datasets["train"] = train_data
 
     if not validation and not test:
         # Return early so we don't unnecessarily initialize the validation/test data
         # reader.
-        return data_loaders
+        return datasets
 
     validation_and_test_dataset_reader: DatasetReader = dataset_reader
     validation_dataset_reader_params = params.pop("validation_dataset_reader", None)
@@ -129,27 +166,19 @@ def data_loaders_from_params(
             validation_dataset_reader_params, serialization_dir=serialization_dir
         )
 
-    validation_data_loader_params = params.pop("validation_data_loader", data_loader_params)
-
     if validation:
         validation_data_path = params.pop("validation_data_path")
         logger.info("Reading validation data from %s", validation_data_path)
-        data_loaders["validation"] = DataLoader.from_params(
-            validation_data_loader_params.duplicate(),
-            reader=validation_and_test_dataset_reader,
-            data_path=validation_data_path,
-        )
+        validation_data = validation_and_test_dataset_reader.read(validation_data_path)
+        datasets["validation"] = validation_data
 
     if test:
         test_data_path = params.pop("test_data_path")
         logger.info("Reading test data from %s", test_data_path)
-        data_loaders["test"] = DataLoader.from_params(
-            validation_data_loader_params,
-            reader=validation_and_test_dataset_reader,
-            data_path=test_data_path,
-        )
+        test_data = validation_and_test_dataset_reader.read(test_data_path)
+        datasets["test"] = test_data
 
-    return data_loaders
+    return datasets
 
 
 def create_serialization_dir(
@@ -261,6 +290,8 @@ def get_metrics(
     batch_reg_loss: Optional[float],
     num_batches: int,
     reset: bool = False,
+    world_size: int = 1,
+    cuda_device: Union[int, torch.device] = torch.device("cpu"),
 ) -> Dict[str, float]:
     """
     Gets the metrics but sets `"loss"` to
@@ -280,27 +311,10 @@ def get_metrics(
     return metrics
 
 
-def get_train_and_validation_metrics(metrics: Dict) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """
-    Utility function to separate out train_metrics and val_metrics.
-    """
-    train_metrics: Dict[str, Any] = {}
-    val_metrics: Dict[str, Any] = {}
-    for key, value in metrics.items():
-        if key.startswith("training_"):
-            key = key.replace("training_", "", 1)
-            if key not in {"duration", "start_epoch", "epochs"}:
-                train_metrics[key] = value
-        elif key.startswith("validation_"):
-            key = key.replace("validation_", "", 1)
-            val_metrics[key] = value
-    return train_metrics, val_metrics
-
-
 def evaluate(
     model: Model,
     data_loader: DataLoader,
-    cuda_device: Union[int, torch.device] = -1,
+    cuda_device: int = -1,
     batch_weight_key: str = None,
     output_file: str = None,
     predictions_output_file: str = None,
@@ -313,7 +327,7 @@ def evaluate(
     data_loader : `DataLoader`
         The `DataLoader` that will iterate over the evaluation data (data loaders already contain
         their data).
-    cuda_device : `Union[int, torch.device]`, optional (default=`-1`)
+    cuda_device : `int`, optional (default=`-1`)
         The cuda device to use for this evaluation.  The model is assumed to already be using this
         device; this parameter is only used for moving the input data to the correct device.
     batch_weight_key : `str`, optional (default=`None`)
@@ -330,7 +344,6 @@ def evaluate(
         The final metrics.
     """
     check_for_gpu(cuda_device)
-    data_loader.set_target_device(int_to_device(cuda_device))
     predictions_file = (
         None if predictions_output_file is None else open(predictions_output_file, "w")
     )
@@ -449,25 +462,21 @@ def make_vocab_from_params(
         "datasets_for_vocab_creation", None
     )
     # Do a quick sanity check here. There's no need to load any datasets if the vocab
-    # type is "empty" or "from_files".
-    if datasets_for_vocab_creation is None and vocab_params.get("type") in {
-        "empty",
-        "from_files",
-        "from_pretrained_transformer",
-    }:
+    # type is "empty".
+    if datasets_for_vocab_creation is None and vocab_params.get("type") in ("empty", "from_files"):
         datasets_for_vocab_creation = []
 
-    data_loaders: Dict[str, DataLoader]
+    datasets: Dict[str, Union["AllennlpDataset", "AllennlpLazyDataset"]]
     if datasets_for_vocab_creation is None:
         # If `datasets_for_vocab_creation` was not specified, we'll use all datasets
         # from the config.
-        data_loaders = data_loaders_from_params(params, serialization_dir=serialization_dir)
+        datasets = datasets_from_params(params, serialization_dir=serialization_dir)
     else:
         for dataset_name in datasets_for_vocab_creation:
             data_path = f"{dataset_name}_data_path"
             if data_path not in params:
                 raise ConfigurationError(f"invalid 'datasets_for_vocab_creation' {dataset_name}")
-        data_loaders = data_loaders_from_params(
+        datasets = datasets_from_params(
             params,
             serialization_dir=serialization_dir,
             train=("train" in datasets_for_vocab_creation),
@@ -477,9 +486,9 @@ def make_vocab_from_params(
 
     instances: Iterable[Instance] = (
         instance
-        for key, data_loader in data_loaders.items()
+        for key, dataset in datasets.items()
         if datasets_for_vocab_creation is None or key in datasets_for_vocab_creation
-        for instance in data_loader.iter_instances()
+        for instance in dataset
     )
 
     if print_statistics:

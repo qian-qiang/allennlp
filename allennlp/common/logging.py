@@ -83,9 +83,9 @@ def prepare_global_logging(
         formatter = logging.Formatter(
             f"{rank} | %(asctime)s - %(levelname)s - %(name)s - %(message)s"
         )
-    file_handler: logging.Handler = logging.FileHandler(log_file)
-    stdout_handler: logging.Handler = logging.StreamHandler(sys.stdout)
-    stderr_handler: logging.Handler = logging.StreamHandler(sys.stderr)
+    file_handler = logging.FileHandler(log_file)
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    stderr_handler = logging.StreamHandler(sys.stderr)
 
     handler: logging.Handler
     for handler in [file_handler, stdout_handler, stderr_handler]:
@@ -93,7 +93,8 @@ def prepare_global_logging(
 
     # Remove the already set handlers in root logger.
     # Not doing this will result in duplicate log messages
-    root_logger.handlers.clear()
+    for handler in root_logger.handlers:
+        root_logger.removeHandler(handler)
 
     if os.environ.get("ALLENNLP_DEBUG"):
         LEVEL = logging.DEBUG
@@ -113,12 +114,10 @@ def prepare_global_logging(
         root_logger.addHandler(stdout_handler)
         root_logger.addHandler(stderr_handler)
 
-    from allennlp.common.util import SigTermReceived
-
     # write uncaught exceptions to the logs
     def excepthook(exctype, value, traceback):
-        # For interruptions, call the original exception handler.
-        if issubclass(exctype, (KeyboardInterrupt, SigTermReceived)):
+        # For a KeyboardInterrupt, call the original exception handler.
+        if issubclass(exctype, KeyboardInterrupt):
             sys.__excepthook__(exctype, value, traceback)
             return
         root_logger.critical("Uncaught exception", exc_info=(exctype, value, traceback))
@@ -128,5 +127,4 @@ def prepare_global_logging(
     # also log tqdm
     from allennlp.common.tqdm import logger as tqdm_logger
 
-    tqdm_logger.handlers.clear()
     tqdm_logger.addHandler(file_handler)

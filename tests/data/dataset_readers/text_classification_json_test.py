@@ -1,24 +1,25 @@
 import pytest
 from typing import List
 
-import spacy
-
 from allennlp.data.dataset_readers import TextClassificationJsonReader
+from allennlp.common.util import ensure_list
 from allennlp.common.testing import AllenNlpTestCase
 from allennlp.data.tokenizers.sentence_splitter import SpacySentenceSplitter
 from allennlp.common.util import get_spacy_model
 
 
 class TestTextClassificationJsonReader:
-    def test_set_skip_indexing_true(self):
-        reader = TextClassificationJsonReader(skip_label_indexing=True)
+    @pytest.mark.parametrize("lazy", (True, False))
+    def test_set_skip_indexing_true(self, lazy):
+        reader = TextClassificationJsonReader(lazy=lazy, skip_label_indexing=True)
         ag_path = (
             AllenNlpTestCase.FIXTURES_ROOT
             / "data"
             / "text_classification_json"
             / "integer_labels.jsonl"
         )
-        instances = list(reader.read(ag_path))
+        instances = reader.read(ag_path)
+        instances = ensure_list(instances)
 
         instance1 = {"tokens": ["This", "text", "has", "label", "0"], "label": 0}
         instance2 = {"tokens": ["This", "text", "has", "label", "1"], "label": 1}
@@ -38,19 +39,20 @@ class TestTextClassificationJsonReader:
                 / "text_classification_json"
                 / "imdb_corpus.jsonl"
             )
-            list(reader.read(ag_path))
+            ensure_list(reader.read(ag_path))
         assert str(exec_info.value) == "Labels must be integers if skip_label_indexing is True."
 
-    def test_read_from_file_ag_news_corpus(self):
-        reader = TextClassificationJsonReader()
+    @pytest.mark.parametrize("lazy", (True, False))
+    def test_read_from_file_ag_news_corpus(self, lazy):
+        reader = TextClassificationJsonReader(lazy=lazy)
         ag_path = (
             AllenNlpTestCase.FIXTURES_ROOT
             / "data"
             / "text_classification_json"
             / "ag_news_corpus.jsonl"
         )
-        instances = list(reader.read(ag_path))
-        is_version_3 = spacy.__version__ >= "3.0"
+        instances = reader.read(ag_path)
+        instances = ensure_list(instances)
 
         instance1 = {
             "tokens": [
@@ -104,61 +106,6 @@ class TestTextClassificationJsonReader:
             ],
             "label": "2",
         }
-        instance1_v3 = {
-            "tokens": [
-                "Memphis",
-                "Rout",
-                "Still",
-                "Stings",
-                "for",
-                "No",
-                ".",
-                "14",
-                "Louisville",
-                ";",
-                "Coach",
-                "Petrino",
-                "Vows",
-                "to",
-                "Have",
-                "Team",
-                "Better",
-                "Prepared",
-                ".",
-                "NASHVILLE",
-                ",",
-                "Tenn.",
-                "Nov",
-                "3",
-                ",",
-                "2004",
-                "-",
-                "Louisville",
-                "#",
-                "39;s",
-                "30",
-                "-",
-                "point",
-                "loss",
-                "at",
-                "home",
-                "to",
-                "Memphis",
-                "last",
-                "season",
-                "is",
-                "still",
-                "a",
-                "painful",
-                "memory",
-                "for",
-                "the",
-                "Cardinals",
-                ".",
-            ],
-            "label": "2",
-        }
-
         instance2 = {
             "tokens": [
                 "AP",
@@ -225,10 +172,7 @@ class TestTextClassificationJsonReader:
 
         assert len(instances) == 3
         fields = instances[0].fields
-        if is_version_3:
-            assert [t.text for t in fields["tokens"].tokens] == instance1_v3["tokens"]
-        else:
-            assert [t.text for t in fields["tokens"].tokens] == instance1["tokens"]
+        assert [t.text for t in fields["tokens"].tokens] == instance1["tokens"]
         assert fields["label"].label == instance1["label"]
         fields = instances[1].fields
         assert [t.text for t in fields["tokens"].tokens] == instance2["tokens"]
@@ -237,15 +181,17 @@ class TestTextClassificationJsonReader:
         assert [t.text for t in fields["tokens"].tokens] == instance3["tokens"]
         assert fields["label"].label == instance3["label"]
 
-    def test_read_from_file_ag_news_corpus_and_truncates_properly(self):
-        reader = TextClassificationJsonReader(max_sequence_length=5)
+    @pytest.mark.parametrize("lazy", (True, False))
+    def test_read_from_file_ag_news_corpus_and_truncates_properly(self, lazy):
+        reader = TextClassificationJsonReader(lazy=lazy, max_sequence_length=5)
         ag_path = (
             AllenNlpTestCase.FIXTURES_ROOT
             / "data"
             / "text_classification_json"
             / "ag_news_corpus.jsonl"
         )
-        instances = list(reader.read(ag_path))
+        instances = reader.read(ag_path)
+        instances = ensure_list(instances)
 
         instance1 = {"tokens": ["Memphis", "Rout", "Still", "Stings", "for"], "label": "2"}
         instance2 = {"tokens": ["AP", "-", "Eli", "Manning", "has"], "label": "2"}
@@ -263,11 +209,12 @@ class TestTextClassificationJsonReader:
         assert fields["label"].label == instance3["label"]
 
     @pytest.mark.parametrize("max_sequence_length", (None, 5))
+    @pytest.mark.parametrize("lazy", (True, False))
     def test_read_from_file_ag_news_corpus_and_segments_sentences_properly(
-        self, max_sequence_length
+        self, lazy, max_sequence_length
     ):
         reader = TextClassificationJsonReader(
-            segment_sentences=True, max_sequence_length=max_sequence_length
+            lazy=lazy, segment_sentences=True, max_sequence_length=max_sequence_length
         )
         ag_path = (
             AllenNlpTestCase.FIXTURES_ROOT
@@ -275,10 +222,11 @@ class TestTextClassificationJsonReader:
             / "text_classification_json"
             / "ag_news_corpus.jsonl"
         )
-        instances = list(reader.read(ag_path))
+        instances = reader.read(ag_path)
+        instances = ensure_list(instances)
 
         splitter = SpacySentenceSplitter()
-        spacy_tokenizer = get_spacy_model("en_core_web_sm", parse=False, ner=False)
+        spacy_tokenizer = get_spacy_model("en_core_web_sm", False, False, False)
 
         text1 = (
             "Memphis Rout Still Stings for No. 14 Louisville; Coach "

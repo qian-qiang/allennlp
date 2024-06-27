@@ -13,7 +13,7 @@ class Scheduler:
     During training using the AllenNLP `Trainer`, this is the API and calling
     sequence for `step` and `step_batch`::
 
-       scheduler = ... # creates scheduler
+       scheduler = ... # creates scheduler, calls self.step(last_epoch=-1) in __init__
 
        batch_num_total = 0
        for epoch in range(num_epochs):
@@ -79,4 +79,5 @@ class Scheduler:
         By default, a scheduler is assumed to only update every epoch, not every batch.
         So this does nothing unless it's overriden.
         """
+
         return

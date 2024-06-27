@@ -1,0 +1,36 @@
+以下是一个简单的示例，展示如何创建和运行一个自定义的子命令：
+
+1. 创建一个自定义子命令类：
+```python
+from allennlp.commands.subcommand import Subcommand
+import argparse
+
+class MyCustomCommand(Subcommand):
+    def add_subparser(self, parser: argparse._SubParsersAction) -> argparse.ArgumentParser:
+        subparser = parser.add_parser(
+            "my-custom-command",
+            description="This is my custom command.",
+            help="Run my custom command."
+        )
+        subparser.add_argument("--my-arg", type=str, help="An argument for my custom command.")
+        subparser.set_defaults(func=self.run)
+        return subparser
+
+    def run(self, args: argparse.Namespace):
+        print(f"Running my custom command with argument: {args.my_arg}")
+
+# Register the custom command
+MyCustomCommand.register("my-custom-command")(MyCustomCommand)
+```
+
+2. 将自定义命令添加到 `allennlp` 的命令行工具中，并运行它：
+```bash
+allennlp my-custom-command --my-arg "Hello, World!"
+```
+
+这将输出：
+```
+Running my custom command with argument: Hello, World!
+```
+
+通过这种方式，你可以创建和运行自定义的 `allennlp` 子命令。

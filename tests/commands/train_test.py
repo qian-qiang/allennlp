@@ -8,21 +8,20 @@ import os
 import re
 import shutil
 from collections import OrderedDict, Counter
-from typing import Optional, List, Dict, Any
+from typing import Iterable, Optional, List, Dict, Any
 
 import pytest
 import torch
 
-from allennlp.version import VERSION
 from allennlp.commands.train import Train, train_model, train_model_from_args, TrainModel
 from allennlp.common import Params
 from allennlp.common.checks import ConfigurationError
 from allennlp.common.testing import AllenNlpTestCase, cpu_or_gpu
-from allennlp.data import Vocabulary
-from allennlp.data.data_loaders import TensorDict
+from allennlp.data import DatasetReader, Instance, Vocabulary
+from allennlp.data.dataloader import TensorDict
 from allennlp.models import load_archive, Model
 from allennlp.models.archival import CONFIG_NAME
-from allennlp.training import TrainerCallback, GradientDescentTrainer
+from allennlp.training import BatchCallback, GradientDescentTrainer
 from allennlp.training.learning_rate_schedulers import (
     ExponentialLearningRateScheduler,
     LearningRateScheduler,
@@ -32,9 +31,9 @@ SEQUENCE_TAGGING_DATA_PATH = str(AllenNlpTestCase.FIXTURES_ROOT / "data" / "sequ
 SEQUENCE_TAGGING_SHARDS_PATH = str(AllenNlpTestCase.FIXTURES_ROOT / "data" / "shards" / "*")
 
 
-@TrainerCallback.register("training_data_logger")
-class TrainingDataLoggerOnBatchCallback(TrainerCallback):
-    def on_batch(  # type: ignore
+@BatchCallback.register("training_data_logger")
+class TrainingDataLoggerBatchCallback(BatchCallback):
+    def __call__(  # type: ignore
         self,
         trainer: "GradientDescentTrainer",
         batch_inputs: List[TensorDict],
@@ -43,8 +42,7 @@ class TrainingDataLoggerOnBatchCallback(TrainerCallback):
         epoch: int,
         batch_number: int,
         is_training: bool,
-        is_primary: bool = True,
-        **kwargs,
+        is_master: bool,
     ) -> None:
         if is_training:
             logger = logging.getLogger(__name__)
@@ -56,9 +54,9 @@ class TrainingDataLoggerOnBatchCallback(TrainerCallback):
 _seen_training_devices = set()
 
 
-@TrainerCallback.register("training_device_logger")
-class TrainingDeviceLoggerOnBatchCallback(TrainerCallback):
-    def on_batch(  # type: ignore
+@BatchCallback.register("training_device_logger")
+class TrainingDeviceLoggerBatchCallback(BatchCallback):
+    def __call__(  # type: ignore
         self,
         trainer: "GradientDescentTrainer",
         batch_inputs: List[TensorDict],
@@ -67,26 +65,11 @@ class TrainingDeviceLoggerOnBatchCallback(TrainerCallback):
         epoch: int,
         batch_number: int,
         is_training: bool,
-        is_primary: bool = True,
-        **kwargs,
+        is_master: bool,
     ) -> None:
         global _seen_training_devices
         for tensor in trainer.model.parameters():
             _seen_training_devices.add(tensor.device)
-
-
-@TrainerCallback.register("training_primary_check")
-class TrainingPrimaryCheckCallback(TrainerCallback):
-    """
-    Makes sure there is only one primary worker.
-    """
-
-    def on_start(
-        self, trainer: "GradientDescentTrainer", is_primary: bool = True, **kwargs
-    ) -> None:
-        super().on_start(trainer, is_primary=is_primary, **kwargs)
-        if is_primary:
-            assert torch.distributed.get_rank() == 0
 
 
 class TestTrain(AllenNlpTestCase):
@@ -110,11 +93,7 @@ class TestTrain(AllenNlpTestCase):
     def test_train_model(self):
         params = lambda: copy.deepcopy(self.DEFAULT_PARAMS)
 
-        serialization_dir = os.path.join(self.TEST_DIR, "test_train_model")
-        train_model(params(), serialization_dir=serialization_dir)
-        archive = load_archive(os.path.join(serialization_dir, "model.tar.gz"))
-        assert archive.meta is not None
-        assert archive.meta.version == VERSION
+        train_model(params(), serialization_dir=os.path.join(self.TEST_DIR, "test_train_model"))
 
         # It's OK if serialization dir exists but is empty:
         serialization_dir2 = os.path.join(self.TEST_DIR, "empty_directory")
@@ -162,7 +141,7 @@ class TestTrain(AllenNlpTestCase):
         import copy
 
         params = copy.deepcopy(self.DEFAULT_PARAMS)
-        params["trainer"]["callbacks"] = ["training_device_logger"]
+        params["trainer"]["batch_callbacks"] = ["training_device_logger"]
 
         global _seen_training_devices
         _seen_training_devices.clear()
@@ -179,7 +158,7 @@ class TestTrain(AllenNlpTestCase):
         import copy
 
         params = copy.deepcopy(self.DEFAULT_PARAMS)
-        params["trainer"]["callbacks"] = ["training_device_logger"]
+        params["trainer"]["batch_callbacks"] = ["training_device_logger"]
         params["trainer"]["cuda_device"] = 0
 
         global _seen_training_devices
@@ -198,7 +177,7 @@ class TestTrain(AllenNlpTestCase):
         import copy
 
         params = copy.deepcopy(self.DEFAULT_PARAMS)
-        params["trainer"]["callbacks"] = ["training_device_logger"]
+        params["trainer"]["batch_callbacks"] = ["training_device_logger"]
         params["trainer"]["cuda_device"] = -1
 
         global _seen_training_devices
@@ -228,13 +207,7 @@ class TestTrain(AllenNlpTestCase):
                 "train_data_path": SEQUENCE_TAGGING_DATA_PATH,
                 "validation_data_path": SEQUENCE_TAGGING_DATA_PATH,
                 "data_loader": {"batch_size": 2},
-                "trainer": {
-                    "num_epochs": 2,
-                    "optimizer": "adam",
-                    # Need to use the fully qualified name here so the distributed workers
-                    # can import it.
-                    "callbacks": ["tests.commands.train_test.TrainingPrimaryCheckCallback"],
-                },
+                "trainer": {"num_epochs": 2, "optimizer": "adam"},
                 "distributed": {"cuda_devices": devices},
             }
         )
@@ -262,65 +235,9 @@ class TestTrain(AllenNlpTestCase):
         # Check we can load the serialized model
         assert load_archive(out_dir).model
 
-    @pytest.mark.parametrize("max_instances", [1, 2, 3, 4, None])
-    @pytest.mark.parametrize("grad_acc", [None, 2])
-    @pytest.mark.parametrize("batch_size", [1, 2, 3])
-    def test_train_model_distributed_with_gradient_accumulation(
-        self, max_instances, grad_acc, batch_size
-    ):
-        if torch.cuda.device_count() >= 2:
-            devices = [0, 1]
-        else:
-            devices = [-1, -1]
-
-        params = lambda: Params(
-            {
-                "model": {
-                    "type": "simple_tagger",
-                    "text_field_embedder": {
-                        "token_embedders": {"tokens": {"type": "embedding", "embedding_dim": 5}}
-                    },
-                    "encoder": {"type": "lstm", "input_size": 5, "hidden_size": 7, "num_layers": 2},
-                },
-                "dataset_reader": {"type": "sequence_tagging", "max_instances": max_instances},
-                "train_data_path": SEQUENCE_TAGGING_DATA_PATH,
-                "validation_data_path": SEQUENCE_TAGGING_DATA_PATH,
-                "data_loader": {"batch_size": batch_size},
-                "trainer": {
-                    "num_epochs": 2,
-                    "optimizer": "adam",
-                    "num_gradient_accumulation_steps": grad_acc,
-                },
-                "distributed": {"cuda_devices": devices},
-            }
-        )
-
-        out_dir = os.path.join(self.TEST_DIR, "test_distributed_train_with_grad_acc")
-        train_model(params(), serialization_dir=out_dir)
-
-        # Check that some logs specific to distributed
-        # training are where we expect.
-        serialized_files = os.listdir(out_dir)
-        assert "out_worker0.log" in serialized_files
-        assert "out_worker1.log" in serialized_files
-        assert "model.tar.gz" in serialized_files
-        assert "metrics.json" in serialized_files
-
-        # Make sure the metrics look right.
-        with open(os.path.join(out_dir, "metrics.json")) as f:
-            metrics = json.load(f)
-            assert metrics["peak_worker_0_memory_MB"] > 0
-            assert metrics["peak_worker_1_memory_MB"] > 0
-            if torch.cuda.device_count() >= 2:
-                assert metrics["peak_gpu_0_memory_MB"] > 0
-                assert metrics["peak_gpu_1_memory_MB"] > 0
-
-        # Check we can load the serialized model
-        assert load_archive(out_dir).model
-
     @cpu_or_gpu
-    @pytest.mark.parametrize("max_instances_in_memory", [None, 10])
-    def test_train_model_distributed_with_sharded_reader(self, max_instances_in_memory):
+    @pytest.mark.parametrize("lazy", [True, False])
+    def test_train_model_distributed_with_sharded_reader(self, lazy):
         if torch.cuda.device_count() >= 2:
             devices = [0, 1]
         else:
@@ -335,13 +252,14 @@ class TestTrain(AllenNlpTestCase):
                     },
                     "encoder": {"type": "lstm", "input_size": 5, "hidden_size": 7, "num_layers": 2},
                 },
-                "dataset_reader": {"type": "sharded", "base_reader": {"type": "sequence_tagging"}},
+                "dataset_reader": {
+                    "type": "sharded",
+                    "base_reader": {"type": "sequence_tagging"},
+                    "lazy": lazy,
+                },
                 "train_data_path": SEQUENCE_TAGGING_SHARDS_PATH,
                 "validation_data_path": SEQUENCE_TAGGING_SHARDS_PATH,
-                "data_loader": {
-                    "batch_size": 1,
-                    "max_instances_in_memory": max_instances_in_memory,
-                },
+                "data_loader": {"batch_size": 2},
                 "trainer": {"num_epochs": 2, "optimizer": "adam"},
                 "distributed": {"cuda_devices": devices},
             }
@@ -407,8 +325,8 @@ class TestTrain(AllenNlpTestCase):
             assert validation_complete in worker1_log
 
     @cpu_or_gpu
-    @pytest.mark.parametrize("max_instances_in_memory", [None, 10])
-    def test_train_model_distributed_without_sharded_reader(self, max_instances_in_memory):
+    @pytest.mark.parametrize("lazy", [True, False])
+    def test_train_model_distributed_without_sharded_reader(self, lazy: bool):
         if torch.cuda.device_count() >= 2:
             devices = [0, 1]
         else:
@@ -424,17 +342,16 @@ class TestTrain(AllenNlpTestCase):
                     },
                     "encoder": {"type": "lstm", "input_size": 5, "hidden_size": 7, "num_layers": 2},
                 },
-                "dataset_reader": {"type": "sequence_tagging", "max_instances": 4},
+                "dataset_reader": {"type": "sequence_tagging", "lazy": lazy},
                 "train_data_path": SEQUENCE_TAGGING_DATA_PATH,
                 "validation_data_path": SEQUENCE_TAGGING_DATA_PATH,
-                "data_loader": {
-                    "batch_size": 1,
-                    "max_instances_in_memory": max_instances_in_memory,
-                },
+                "data_loader": {"batch_size": 1},
                 "trainer": {
                     "num_epochs": num_epochs,
                     "optimizer": "adam",
-                    "callbacks": ["tests.commands.train_test.TrainingDataLoggerOnBatchCallback"],
+                    "batch_callbacks": [
+                        "tests.commands.train_test.TrainingDataLoggerBatchCallback"
+                    ],
                 },
                 "distributed": {"cuda_devices": devices},
             }
@@ -610,20 +527,18 @@ class TestTrain(AllenNlpTestCase):
 
         batch_callback_counter = 0
 
-        @TrainerCallback.register("counter")
-        class CounterOnBatchCallback(TrainerCallback):
-            def on_batch(
+        @BatchCallback.register("counter")
+        class CounterBatchCallback(BatchCallback):
+            def __call__(
                 self,
                 trainer: GradientDescentTrainer,
-                batch_inputs: List[TensorDict],
+                batch_inputs: List[List[TensorDict]],
                 batch_outputs: List[Dict[str, Any]],
                 batch_metrics: Dict[str, Any],
                 epoch: int,
                 batch_number: int,
                 is_training: bool,
-                is_primary: bool = True,
-                batch_grad_norm: Optional[float] = None,
-                **kwargs,
+                is_master: bool,
             ) -> None:
                 nonlocal batch_callback_counter
                 if is_training:
@@ -648,7 +563,7 @@ class TestTrain(AllenNlpTestCase):
                     "num_epochs": number_of_epochs,
                     "optimizer": "adam",
                     "learning_rate_scheduler": {"type": "mock"},
-                    "callbacks": ["counter"],
+                    "batch_callbacks": ["counter"],
                 },
             }
         )
@@ -724,6 +639,63 @@ class TestTrain(AllenNlpTestCase):
         # training is different from the data we used to produce the model archive, and we set
         # parameters such that the vocab should have been extended.
         assert train_loop.model.vocab.get_vocab_size() > model.vocab.get_vocab_size()
+
+
+@DatasetReader.register("lazy-test")
+class LazyFakeReader(DatasetReader):
+    def __init__(self) -> None:
+        super().__init__(lazy=True)
+        self.reader = DatasetReader.from_params(Params({"type": "sequence_tagging", "lazy": True}))
+
+    def _read(self, file_path: str) -> Iterable[Instance]:
+        """
+        Reads some data from the `file_path` and returns the instances.
+        """
+        return self.reader.read(file_path)
+
+
+class TestTrainOnLazyDataset(AllenNlpTestCase):
+    def test_train_model(self):
+        params = Params(
+            {
+                "model": {
+                    "type": "simple_tagger",
+                    "text_field_embedder": {
+                        "token_embedders": {"tokens": {"type": "embedding", "embedding_dim": 5}}
+                    },
+                    "encoder": {"type": "lstm", "input_size": 5, "hidden_size": 7, "num_layers": 2},
+                },
+                "dataset_reader": {"type": "lazy-test"},
+                "train_data_path": SEQUENCE_TAGGING_DATA_PATH,
+                "validation_data_path": SEQUENCE_TAGGING_DATA_PATH,
+                "data_loader": {"batch_size": 2},
+                "trainer": {"num_epochs": 2, "optimizer": "adam"},
+            }
+        )
+
+        train_model(params, serialization_dir=os.path.join(self.TEST_DIR, "train_lazy_model"))
+
+    def test_train_with_test_set(self):
+        params = Params(
+            {
+                "model": {
+                    "type": "simple_tagger",
+                    "text_field_embedder": {
+                        "token_embedders": {"tokens": {"type": "embedding", "embedding_dim": 5}}
+                    },
+                    "encoder": {"type": "lstm", "input_size": 5, "hidden_size": 7, "num_layers": 2},
+                },
+                "dataset_reader": {"type": "lazy-test"},
+                "train_data_path": SEQUENCE_TAGGING_DATA_PATH,
+                "test_data_path": SEQUENCE_TAGGING_DATA_PATH,
+                "validation_data_path": SEQUENCE_TAGGING_DATA_PATH,
+                "evaluate_on_test": True,
+                "data_loader": {"batch_size": 2},
+                "trainer": {"num_epochs": 2, "optimizer": "adam"},
+            }
+        )
+
+        train_model(params, serialization_dir=os.path.join(self.TEST_DIR, "lazy_test_set"))
 
     def test_train_nograd_regex(self):
         params_get = lambda: Params(
@@ -812,17 +784,7 @@ class TestDryRun(AllenNlpTestCase):
             tokens = [line.strip() for line in f]
 
         tokens.sort()
-        assert tokens == [
-            ".",
-            "@@UNKNOWN@@",
-            "animals",
-            "are",
-            "birds",
-            "cats",
-            "dogs",
-            "horses",
-            "snakes",
-        ]
+        assert tokens == [".", "@@UNKNOWN@@", "animals", "are", "birds", "cats", "dogs", "snakes"]
 
         with open(vocab_path / "labels.txt") as f:
             labels = [line.strip() for line in f]

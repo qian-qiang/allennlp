@@ -1,52 +1,68 @@
-# AllenNLP 风格指南
+# AllenNLP Style Guide
 
-我们的代码风格的最高优先级是让新加入代码库的人能够轻松阅读代码。深度学习容易出错，我们希望代码易于阅读，
-让查看代码的人能够关注我们的建模决策，而不是试图理解代码的运行方式。
+Our highest priority for code style is that our code be easily readable to someone new to the
+codebase.  Deep learning is easy to get wrong, and we want our code to be easy enough to read that
+someone looking at it can be thinking about our modeling decisions, not trying to understand what
+is going on.
 
-为此，我们使用描述性命名、类型注释和连贯的文档字符串。在处理张量的代码中，大多数计算张量的行都有描述张
-量形状的注释。当代码中有有趣或重要的建模决策时，我们会写注释（可以是行内注释或适当的文档字符串）。
+To that end, we use descriptive names, we use type annotations, and we write coherent docstrings.
+In code that manipulates tensors, most lines that compute a tensor have a comment describing the
+tensor's shape.  When there's an interesting or important modeling decision in the code, we write
+a comment about it (either in-line or in an appropriate docstring).
 
-## 文档字符串
+## Docstrings
 
-所有合理复杂的公共方法都应有文档字符串，描述其基本功能、输入和输出。私有方法也通常应该有文档字符串，
-以便阅读代码的人知道该方法的用途。我们使用的文档字符串基本结构是：
-(1) 简要描述方法的作用，有时还包括方法的实现方式或原因，
-(2) 方法的参数/参数，
-(3) 方法的返回值（如果有）。
-如果方法特别简单或参数显而易见，可以省略 (2) 和 (3)。我们的文档使用 Markdown 格式，因此函数参数和返回
-值应格式化为 Markdown 标题（例如 `# Parameters`），
-在代码库中的几乎所有模型或模块中都能看到这种格式。我们将类文档字符串视为 `__init__` 方法的文档，
-在此处给出参数并省略构造函数本身的文档字符串。对于模型/模块构造函数和类似 `forward` 的方法，
-_始终_ 在文档字符串中包括参数和返回值（如果有）。
+All reasonably complex public methods should have docstrings describing their basic function, their
+inputs and their outputs.  Private methods should also most often have docstrings, so that people
+who read your code know what the method is supposed to do.  The basic outline we use for docstrings
+is: (1) a brief description of what the method does, sometimes also including how or why the method
+does it, (2) the parameters / arguments to the method, (3) the return value of the method, if any.
+If the method is particularly simple or the arguments are obvious, (2) and (3) can be omitted. Our
+docs use Markdown formatting, so function arguments and return values should be formatted as Markdown
+headers (e.g `# Parameters`), seen in just about any model or module in the codebase.  We treat the
+class docstring as the documentation for `__init__` methods, giving parameters there and omitting 
+any docstring on the constructor itself.  For model / module constructors and methods like 
+`forward`, _always_ include the parameters and return values (when there is one) in the docstring.
 
-## 代码格式
+## Code format
 
-我们使用 `flake8`、`black` 和 `mypy` 来强制实现格式的一致性。这些格式指南大致遵循
-[Google 的 Python 风格指南](https://google.github.io/styleguide/pyguide.html#Python_Style_Rules)，
-但有一些显著的例外。特别是因为我们使用类型注释和描述性变量名，所以我们使用 100 字符的行而不是 80 字符的行，
-有时代码行长度可以适当超出。另外，我们使用 `mkdocs` 来构建文档，因此不适用 Google 的文档字符串格式。
+We use `flake8`, `black` and `mypy` to enforce some basic consistency in formatting.  Those
+formatting guidelines roughly follow [Google's python style
+guide](https://google.github.io/styleguide/pyguide.html#Python_Style_Rules), with a few notable
+exceptions.  In particular, because we use type annotations and descriptive variable names, we use
+100-character lines instead of 80-character lines, and it's ok to go over sometimes in code.
+Additionally, we use `mkdocs` for building our docs, so Google's docstring formats don't apply.
 
-## 命名
+## Naming
 
-我们遵循 Google 的[通用命名规则](https://google.github.io/styleguide/cppguide.html#General_Naming_Rules)
-和他们的[驼峰式命名法定义](https://google.github.io/styleguide/javaguide.html#s5.3-camel-case)。
+We follow Google's [general naming
+rules](https://google.github.io/styleguide/cppguide.html#General_Naming_Rules), and their
+[definition of camel case](https://google.github.io/styleguide/javaguide.html#s5.3-camel-case).
 
-## 模块布局和导入
+## Module layout and imports
 
-为了防止文件过大，我们通常每个文件一个类，但与伴随类不可分割的小类也可以放在同一文件中（通常这些类是私有类）。
+To keep files from getting too big, we typically have one class per file, though small classes
+that are inseparable from a companion class can also go in the same file (often these will be
+private classes).
 
-为了避免导入类时的冗长，当类以这种方式组织时，应该从其模块的 `__init__.py` 中导入。
-例如，`Batch` 类在 `allennlp/data/batch.py` 中，但 `allennlp/data/__init__.py` 导入了该类，
-因此你可以直接 `from allennlp.data import Batch`。
+To avoid verbosity when importing classes structured this way, classes should be imported from
+their module's `__init__.py`.  For example, the `Batch` class is in `allennlp/data/batch.py`,
+but `allennlp/data/__init__.py` imports the class, so that you can just do `from allennlp.data
+import Batch`.
 
-抽象类通常放在包含抽象类和所有内置实现的模块中。这包括 `Field`（在 `allennlp.data.fields` 中）、
-`Seq2SeqEncoder`（在 `allennlp.modules.seq2seq_encoders` 中）以及许多其他类。在这些情况下，
-抽象类应导入到上一级模块，以便可以 `from allennlp.data import Field`。
-具体实现遵循上述相同的布局：`from allennlp.data.fields import TextField`。
+Abstract classes typically go in a module containing the abstract class and all built-in
+implementations.  This includes things like `Field` (in `allennlp.data.fields`), `Seq2SeqEncoder`
+(in `allennlp.modules.seq2seq_encoders`), and many others.  In these cases, the abstract class
+should be imported into the module _above_, so that you can do, e.g., `from allennlp.data import
+Field`.  Concrete implementations follow the same layout as above: `from allennlp.data.fields
+import TextField`.
 
-导入应格式化在文件顶部，遵循[PEP 8 的建议](https://www.python.org/dev/peps/pep-0008/#imports)：
-三个部分（标准库、第三方库、内部导入），每个部分排序并用空行分隔。
+Imports should be formatted at the top of the file, following [PEP 8's
+recommendations](https://www.python.org/dev/peps/pep-0008/#imports): three sections (standard
+library, third-party libraries, internal imports), each sorted and separated by a blank line.
 
-## 结论
+## Conclusion
 
-我们采用的一些约定是任意的（例如，其他驼峰式命名法定义也有效），但我们坚持这些约定以保持代码库的一致风格，从而使代码更易于阅读和维护。
+Some of the conventions we've adopted are arbitrary (e.g., other definitions of camel case are
+also valid), but we stick to them to keep a consistent style throughout the codebase, which makes
+it easier to read and maintain.

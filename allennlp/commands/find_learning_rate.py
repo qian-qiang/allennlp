@@ -12,6 +12,7 @@ import re
 from typing import List, Tuple
 import itertools
 
+from overrides import overrides
 
 from allennlp.commands.subcommand import Subcommand
 from allennlp.common import Params, Tqdm
@@ -19,15 +20,17 @@ from allennlp.common import logging as common_logging
 from allennlp.common.checks import check_for_gpu, ConfigurationError
 from allennlp.common.util import prepare_environment
 from allennlp.data import Vocabulary
+from allennlp.data import DataLoader
 from allennlp.models import Model
 from allennlp.training import GradientDescentTrainer, Trainer
-from allennlp.training.util import create_serialization_dir, data_loaders_from_params
+from allennlp.training.util import create_serialization_dir, datasets_from_params
 
 logger = logging.getLogger(__name__)
 
 
 @Subcommand.register("find-lr")
 class FindLearningRate(Subcommand):
+    @overrides
     def add_subparser(self, parser: argparse._SubParsersAction) -> argparse.ArgumentParser:
 
         description = """Find a learning rate range where loss decreases quickly
@@ -162,11 +165,11 @@ def find_learning_rate_model(
     # See https://github.com/allenai/allennlp/issues/3658
     assert not distributed_params, "find-lr is not compatible with DistributedDataParallel."
 
-    all_data_loaders = data_loaders_from_params(params)
-    datasets_for_vocab_creation = set(params.pop("datasets_for_vocab_creation", all_data_loaders))
+    all_datasets = datasets_from_params(params, serialization_dir=serialization_dir)
+    datasets_for_vocab_creation = set(params.pop("datasets_for_vocab_creation", all_datasets))
 
     for dataset in datasets_for_vocab_creation:
-        if dataset not in all_data_loaders:
+        if dataset not in all_datasets:
             raise ConfigurationError(f"invalid 'dataset_for_vocab_creation' {dataset}")
 
     logger.info(
@@ -177,17 +180,18 @@ def find_learning_rate_model(
         params.pop("vocabulary", {}),
         instances=(
             instance
-            for key, data_loader in all_data_loaders.items()
+            for key, dataset in all_datasets.items()
+            for instance in dataset
             if key in datasets_for_vocab_creation
-            for instance in data_loader.iter_instances()
         ),
     )
 
+    train_data = all_datasets["train"]
+    train_data.index_with(vocab)
     model = Model.from_params(
         vocab=vocab, params=params.pop("model"), serialization_dir=serialization_dir
     )
-
-    all_data_loaders["train"].index_with(vocab)
+    data_loader = DataLoader.from_params(dataset=train_data, params=params.pop("data_loader"))
 
     trainer_params = params.pop("trainer")
 
@@ -204,7 +208,7 @@ def find_learning_rate_model(
     trainer: GradientDescentTrainer = Trainer.from_params(  # type: ignore
         model=model,
         serialization_dir=serialization_dir,
-        data_loader=all_data_loaders["train"],
+        data_loader=data_loader,
         params=trainer_params,
     )
 
@@ -281,7 +285,7 @@ def search_learning_rate(
         if linear_steps:
             current_lr = start_lr + (lr_update_factor * i)
         else:
-            current_lr = start_lr * (lr_update_factor**i)
+            current_lr = start_lr * (lr_update_factor ** i)
 
         for param_group in trainer.optimizer.param_groups:
             param_group["lr"] = current_lr
@@ -315,7 +319,7 @@ def search_learning_rate(
 
 
 def _smooth(values: List[float], beta: float) -> List[float]:
-    """Exponential smoothing of values"""
+    """ Exponential smoothing of values """
     avg_value = 0.0
     smoothed = []
     for i, value in enumerate(values):

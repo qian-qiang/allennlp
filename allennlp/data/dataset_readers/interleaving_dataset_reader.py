@@ -1,14 +1,8 @@
-from typing import Dict, Mapping, Iterable, Union, Optional
+from typing import Dict, Mapping, Iterable
 import json
 
-
 from allennlp.common.checks import ConfigurationError
-from allennlp.data.dataset_readers.dataset_reader import (
-    DatasetReader,
-    PathOrStr,
-    WorkerInfo,
-    DistributedInfo,
-)
+from allennlp.data.dataset_readers.dataset_reader import DatasetReader
 from allennlp.data.fields import MetadataField
 from allennlp.data.instance import Instance
 
@@ -58,16 +52,6 @@ class InterleavingDatasetReader(DatasetReader):
             raise ConfigurationError(f"invalid scheme: {scheme}")
         self._scheme = scheme
 
-    def _set_worker_info(self, info: Optional[WorkerInfo]) -> None:
-        super()._set_worker_info(info)
-        for reader in self._readers.values():
-            reader._set_worker_info(info)
-
-    def _set_distributed_info(self, info: Optional[DistributedInfo]) -> None:
-        super()._set_distributed_info(info)
-        for reader in self._readers.values():
-            reader._set_distributed_info(info)
-
     def _read_round_robin(self, datasets: Mapping[str, Iterable[Instance]]) -> Iterable[Instance]:
         remaining = set(datasets)
         dataset_iterators = {key: iter(dataset) for key, dataset in datasets.items()}
@@ -88,17 +72,14 @@ class InterleavingDatasetReader(DatasetReader):
                 instance.fields[self._dataset_field_name] = MetadataField(key)
                 yield instance
 
-    def _read(self, file_path: Union[str, Dict[str, PathOrStr]]) -> Iterable[Instance]:
-        if isinstance(file_path, str):
-            try:
-                file_paths = json.loads(file_path)
-            except json.JSONDecodeError:
-                raise ConfigurationError(
-                    "the file_path for the InterleavingDatasetReader "
-                    "needs to be a JSON-serialized dictionary {reader_name -> file_path}"
-                )
-        else:
-            file_paths = file_path
+    def _read(self, file_path: str) -> Iterable[Instance]:
+        try:
+            file_paths = json.loads(file_path)
+        except json.JSONDecodeError:
+            raise ConfigurationError(
+                "the file_path for the InterleavingDatasetReader "
+                "needs to be a JSON-serialized dictionary {reader_name -> file_path}"
+            )
 
         if file_paths.keys() != self._readers.keys():
             raise ConfigurationError("mismatched keys")
@@ -113,9 +94,6 @@ class InterleavingDatasetReader(DatasetReader):
         else:
             raise RuntimeError("impossible to get here")
 
-    def text_to_instance(self, dataset_key: str, *args, **kwargs) -> Instance:  # type: ignore
-        return self._readers[dataset_key].text_to_instance(*args, **kwargs)  # type: ignore[call-arg]
+    def text_to_instance(self) -> Instance:  # type: ignore
 
-    def apply_token_indexers(self, instance: Instance) -> None:
-        dataset = instance.fields[self._dataset_field_name].metadata  # type: ignore[attr-defined]
-        self._readers[dataset].apply_token_indexers(instance)
+        raise RuntimeError("text_to_instance doesn't make sense here")

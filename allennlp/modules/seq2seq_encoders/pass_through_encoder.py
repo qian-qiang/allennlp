@@ -1,3 +1,4 @@
+from overrides import overrides
 import torch
 
 from allennlp.modules.seq2seq_encoders.seq2seq_encoder import Seq2SeqEncoder
@@ -17,15 +18,19 @@ class PassThroughEncoder(Seq2SeqEncoder):
         super().__init__()
         self._input_dim = input_dim
 
+    @overrides
     def get_input_dim(self) -> int:
         return self._input_dim
 
+    @overrides
     def get_output_dim(self) -> int:
         return self._input_dim
 
+    @overrides
     def is_bidirectional(self):
         return False
 
+    @overrides
     def forward(self, inputs: torch.Tensor, mask: torch.BoolTensor = None) -> torch.Tensor:
         """
         # Parameters

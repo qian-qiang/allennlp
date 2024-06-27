@@ -8,6 +8,7 @@ import json
 import logging
 import os
 
+from overrides import overrides
 
 from allennlp.commands.subcommand import Subcommand
 
@@ -18,6 +19,7 @@ logger = logging.getLogger(__name__)
 class PrintResults(Subcommand):
     requires_plugins: bool = False
 
+    @overrides
     def add_subparser(self, parser: argparse._SubParsersAction) -> argparse.ArgumentParser:
 
         description = """Print results from allennlp training runs in a helpful CSV format."""

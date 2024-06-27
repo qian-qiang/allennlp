@@ -1,13 +1,12 @@
 import copy
-import dataclasses
 import logging
 from typing import Any, Dict, List, Optional, Tuple, Iterable
 
-
+from overrides import overrides
 from transformers import PreTrainedTokenizer
 
 from allennlp.common.util import sanitize_wordpiece
-from allennlp.data.tokenizers.token_class import Token
+from allennlp.data.tokenizers.token import Token
 from allennlp.data.tokenizers.tokenizer import Tokenizer
 
 logger = logging.getLogger(__name__)
@@ -41,12 +40,14 @@ class PretrainedTransformerTokenizer(Tokenizer):
         to their model.
     max_length : `int`, optional (default=`None`)
         If set to a number, will limit the total sequence returned so that it has a maximum length.
+        If there are overflowing tokens, those will be added to the returned dictionary
+    stride : `int`, optional (default=`0`)
+        If set to a number along with max_length, the overflowing tokens returned will contain some tokens
+        from the main sequence returned. The value of this argument defines the number of additional tokens.
     tokenizer_kwargs: `Dict[str, Any]`, optional (default = `None`)
         Dictionary with
         [additional arguments](https://github.com/huggingface/transformers/blob/155c782a2ccd103cf63ad48a2becd7c76a7d2115/transformers/tokenization_utils.py#L691)
         for `AutoTokenizer.from_pretrained`.
-    verification_tokens: `Tuple[str, str]`, optional (default = `None`)
-        A pair of tokens having different token IDs. It's used for reverse-engineering special tokens.
     """  # noqa: E501
 
     def __init__(
@@ -54,40 +55,34 @@ class PretrainedTransformerTokenizer(Tokenizer):
         model_name: str,
         add_special_tokens: bool = True,
         max_length: Optional[int] = None,
+        stride: int = 0,
         tokenizer_kwargs: Optional[Dict[str, Any]] = None,
-        verification_tokens: Optional[Tuple[str, str]] = None,
     ) -> None:
         if tokenizer_kwargs is None:
             tokenizer_kwargs = {}
         else:
             tokenizer_kwargs = tokenizer_kwargs.copy()
-        # Note: Just because we request a fast tokenizer doesn't mean we get one.
         tokenizer_kwargs.setdefault("use_fast", True)
-
-        self._tokenizer_kwargs = tokenizer_kwargs
-        self._model_name = model_name
+        # Note: Just because we request a fast tokenizer doesn't mean we get one.
 
         from allennlp.common import cached_transformers
 
         self.tokenizer = cached_transformers.get_tokenizer(
-            self._model_name, add_special_tokens=False, **self._tokenizer_kwargs
+            model_name, add_special_tokens=False, **tokenizer_kwargs
         )
 
         self._add_special_tokens = add_special_tokens
         self._max_length = max_length
+        self._stride = stride
 
         self._tokenizer_lowercases = self.tokenizer_lowercases(self.tokenizer)
 
-        if verification_tokens is None:
-            try:
-                self._reverse_engineer_special_tokens("a", "b", model_name, tokenizer_kwargs)
-            except AssertionError:
-                # For most transformer models, "a" and "b" work just fine as dummy tokens.  For a few,
-                # they don't, and so we use "1" and "2" instead.
-                self._reverse_engineer_special_tokens("1", "2", model_name, tokenizer_kwargs)
-        else:
-            token_a, token_b = verification_tokens
-            self._reverse_engineer_special_tokens(token_a, token_b, model_name, tokenizer_kwargs)
+        try:
+            self._reverse_engineer_special_tokens("a", "b", model_name, tokenizer_kwargs)
+        except AssertionError:
+            # For most transformer models, "a" and "b" work just fine as dummy tokens.  For a few,
+            # they don't, and so we use "1" and "2" instead.
+            self._reverse_engineer_special_tokens("1", "2", model_name, tokenizer_kwargs)
 
     def _reverse_engineer_special_tokens(
         self,
@@ -232,6 +227,7 @@ class PretrainedTransformerTokenizer(Tokenizer):
         detokenized = " ".join(tokenized)
         return "a" in detokenized
 
+    @overrides
     def tokenize(self, text: str) -> List[Token]:
         """
         This method only handles a single sentence (or sequence) of text.
@@ -244,7 +240,7 @@ class PretrainedTransformerTokenizer(Tokenizer):
             text=text,
             add_special_tokens=True,
             max_length=max_length,
-            truncation=True if max_length is not None else False,
+            stride=self._stride,
             return_tensors=None,
             return_offsets_mapping=self.tokenizer.is_fast,
             return_attention_mask=False,
@@ -437,6 +433,9 @@ class PretrainedTransformerTokenizer(Tokenizer):
         # Make sure we don't change the input parameters
         tokens2 = copy.deepcopy(tokens2)
 
+        # We add special tokens and also set token type ids.
+        import dataclasses
+
         if tokens2 is None:
             return (
                 self.single_sequence_start_tokens
@@ -461,12 +460,3 @@ class PretrainedTransformerTokenizer(Tokenizer):
             + len(self.sequence_pair_mid_tokens)
             + len(self.sequence_pair_end_tokens)
         )
-
-    def _to_params(self) -> Dict[str, Any]:
-        return {
-            "type": "pretrained_transformer",
-            "model_name": self._model_name,
-            "add_special_tokens": self._add_special_tokens,
-            "max_length": self._max_length,
-            "tokenizer_kwargs": self._tokenizer_kwargs,
-        }

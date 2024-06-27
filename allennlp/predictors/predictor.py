@@ -1,9 +1,9 @@
-from typing import List, Iterator, Dict, Tuple, Any, Type, Union, Optional
+from typing import List, Iterator, Dict, Tuple, Any, Type, Union
 import logging
-from os import PathLike
 import json
 import re
 from contextlib import contextmanager
+from pathlib import Path
 
 import numpy
 import torch
@@ -67,7 +67,6 @@ class Predictor(Registrable):
         """
 
         instance = self._json_to_instance(inputs)
-        self._dataset_reader.apply_token_indexers(instance)
         outputs = self._model.forward_on_instance(instance)
         new_instances = self.predictions_to_labeled_instances(instance, outputs)
         return new_instances
@@ -105,9 +104,6 @@ class Predictor(Registrable):
         embedding_gradients: List[Tensor] = []
         hooks: List[RemovableHandle] = self._register_embedding_gradient_hooks(embedding_gradients)
 
-        for instance in instances:
-            self._dataset_reader.apply_token_indexers(instance)
-
         dataset = Batch(instances)
         dataset.index_instances(self._model.vocab)
         dataset_tensor_dict = util.move_to_device(dataset.as_tensor_dict(), self.cuda_device)
@@ -138,37 +134,6 @@ class Predictor(Registrable):
             param.requires_grad = original_param_name_to_requires_grad_dict[param_name]
 
         return grad_dict, outputs
-
-    def get_interpretable_layer(self) -> torch.nn.Module:
-        """
-        Returns the input/embedding layer of the model.
-        If the predictor wraps around a non-AllenNLP model,
-        this function should be overridden to specify the correct input/embedding layer.
-        For the cases where the input layer _is_ an embedding layer, this should be the
-        layer 0 of the embedder.
-        """
-        try:
-            return util.find_embedding_layer(self._model)
-        except RuntimeError:
-            raise RuntimeError(
-                "If the model does not use `TextFieldEmbedder`, please override "
-                "`get_interpretable_layer` in your predictor to specify the embedding layer."
-            )
-
-    def get_interpretable_text_field_embedder(self) -> torch.nn.Module:
-        """
-        Returns the first `TextFieldEmbedder` of the model.
-        If the predictor wraps around a non-AllenNLP model,
-        this function should be overridden to specify the correct embedder.
-        """
-        try:
-            return util.find_text_field_embedder(self._model)
-        except RuntimeError:
-            raise RuntimeError(
-                "If the model does not use `TextFieldEmbedder`, please override "
-                "`get_interpretable_text_field_embedder` in your predictor to specify "
-                "the embedding layer."
-            )
 
     def _register_embedding_gradient_hooks(self, embedding_gradients):
         """
@@ -216,9 +181,9 @@ class Predictor(Registrable):
                 self._token_offsets.append(offsets)
 
         hooks = []
-        text_field_embedder = self.get_interpretable_text_field_embedder()
+        text_field_embedder = util.find_text_field_embedder(self._model)
         hooks.append(text_field_embedder.register_forward_hook(get_token_offsets))
-        embedding_layer = self.get_interpretable_layer()
+        embedding_layer = util.find_embedding_layer(self._model)
         hooks.append(embedding_layer.register_backward_hook(hook_layers))
         return hooks
 
@@ -259,7 +224,6 @@ class Predictor(Registrable):
             hook.remove()
 
     def predict_instance(self, instance: Instance) -> JsonDict:
-        self._dataset_reader.apply_token_indexers(instance)
         outputs = self._model.forward_on_instance(instance)
         return sanitize(outputs)
 
@@ -268,13 +232,12 @@ class Predictor(Registrable):
     ) -> List[Instance]:
         """
         This function takes a model's outputs for an Instance, and it labels that instance according
-        to the `outputs`. This function is used to (1) compute gradients of what the model predicted;
-        (2) label the instance for the attack. For example, (a) for the untargeted attack for classification
-        this function labels the instance according to the class with the highest probability; (b) for
-        targeted attack, it directly constructs fields from the given target.
-        The return type is a list because in some tasks there are multiple predictions in the output
-        (e.g., in NER a model predicts multiple spans). In this case, each instance in the returned list of
-        Instances contains an individual entity prediction as the label.
+        to the output. For example, in classification this function labels the instance according
+        to the class with the highest probability. This function is used to to compute gradients
+        of what the model predicted. The return type is a list because in some tasks there are
+        multiple predictions in the output (e.g., in NER a model predicts multiple spans). In this
+        case, each instance in the returned list of Instances contains an individual
+        entity prediction as the label.
         """
 
         raise RuntimeError("implement this method for model interpretations or attacks")
@@ -283,7 +246,7 @@ class Predictor(Registrable):
         """
         Converts a JSON object into an [`Instance`](../data/instance.md)
         and a `JsonDict` of information which the `Predictor` should pass through,
-        such as tokenized inputs.
+        such as tokenised inputs.
         """
         raise NotImplementedError
 
@@ -292,8 +255,6 @@ class Predictor(Registrable):
         return self.predict_batch_instance(instances)
 
     def predict_batch_instance(self, instances: List[Instance]) -> List[JsonDict]:
-        for instance in instances:
-            self._dataset_reader.apply_token_indexers(instance)
         outputs = self._model.forward_on_instances(instances)
         return sanitize(outputs)
 
@@ -314,14 +275,13 @@ class Predictor(Registrable):
     @classmethod
     def from_path(
         cls,
-        archive_path: Union[str, PathLike],
+        archive_path: Union[str, Path],
         predictor_name: str = None,
         cuda_device: int = -1,
         dataset_reader_to_load: str = "validation",
         frozen: bool = True,
         import_plugins: bool = True,
         overrides: Union[str, Dict[str, Any]] = "",
-        **kwargs,
     ) -> "Predictor":
         """
         Instantiate a `Predictor` from an archive path.
@@ -331,7 +291,7 @@ class Predictor(Registrable):
 
         # Parameters
 
-        archive_path : `Union[str, PathLike]`
+        archive_path : `Union[str, Path]`
             The path to the archive.
         predictor_name : `str`, optional (default=`None`)
             Name that the predictor is registered as, or None to use the
@@ -351,9 +311,6 @@ class Predictor(Registrable):
             can be found by `allennlp.common.plugins.import_plugins()`.
         overrides : `Union[str, Dict[str, Any]]`, optional (default = `""`)
             JSON overrides to apply to the unarchived `Params` object.
-        **kwargs : `Any`
-            Additional key-word arguments that will be passed to the `Predictor`'s
-            `__init__()` method.
 
         # Returns
 
@@ -367,7 +324,6 @@ class Predictor(Registrable):
             predictor_name,
             dataset_reader_to_load=dataset_reader_to_load,
             frozen=frozen,
-            extra_args=kwargs,
         )
 
     @classmethod
@@ -377,7 +333,6 @@ class Predictor(Registrable):
         predictor_name: str = None,
         dataset_reader_to_load: str = "validation",
         frozen: bool = True,
-        extra_args: Optional[Dict[str, Any]] = None,
     ) -> "Predictor":
         """
         Instantiate a `Predictor` from an [`Archive`](../models/archival.md);
@@ -408,7 +363,4 @@ class Predictor(Registrable):
         if frozen:
             model.eval()
 
-        if extra_args is None:
-            extra_args = {}
-
-        return predictor_class(model, dataset_reader, **extra_args)
+        return predictor_class(model, dataset_reader)

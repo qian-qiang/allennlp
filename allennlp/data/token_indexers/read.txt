@@ -1,0 +1,24 @@
+以下是这些类的简要介绍：
+
+1. **SingleIdTokenIndexer**:
+   - 作用：将每个token映射为一个唯一的整数ID。通常用于词汇表（vocabulary）中每个单词的唯一标识。
+
+2. **TokenCharactersIndexer**:
+   - 作用：将每个token分解为字符，并将每个字符映射为一个唯一的整数ID。适用于字符级别的嵌入（embeddings）。
+
+3. **TokenIndexer**:
+   - 作用：这是一个抽象基类，定义了所有TokenIndexer的接口。具体的TokenIndexer类需要继承并实现这个基类。
+
+4. **ELMoTokenCharactersIndexer**:
+   - 作用：为ELMo模型准备输入，将每个token分解为字符，并将其映射为ELMo所需的字符ID。
+
+5. **SpacyTokenIndexer**:
+   - 作用：使用Spacy库对token进行处理和索引。Spacy是一个流行的自然语言处理库。
+
+6. **PretrainedTransformerIndexer**:
+   - 作用：为预训练的Transformer模型（如BERT、GPT等）准备输入，将token映射为模型所需的ID。
+
+7. **PretrainedTransformerMismatchedIndexer**:
+   - 作用：与PretrainedTransformerIndexer类似，但处理的是tokenization和模型预训练时使用的词汇表不匹配的情况。
+
+这些类的主要作用是将文本数据转换为模型可以处理的数值表示形式。每个类都有其特定的应用场景和处理方式。

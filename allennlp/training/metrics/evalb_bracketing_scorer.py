@@ -5,12 +5,15 @@ import tempfile
 import subprocess
 import shutil
 
-
+from overrides import overrides
 from nltk import Tree
 
+import torch
+import torch.distributed as dist
+
+from allennlp.common.util import is_distributed
 from allennlp.common.checks import ConfigurationError
 from allennlp.training.metrics.metric import Metric
-from allennlp.nn.util import dist_reduce_sum
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +85,7 @@ class EvalbBracketingScorer(Metric):
         self._gold_brackets = 0.0
         self._predicted_brackets = 0.0
 
+    @overrides
     def __call__(self, predicted_trees: List[Tree], gold_trees: List[Tree]) -> None:  # type: ignore
         """
         # Parameters
@@ -149,10 +153,23 @@ class EvalbBracketingScorer(Metric):
 
         shutil.rmtree(tempdir)
 
-        self._correct_predicted_brackets += dist_reduce_sum(_correct_predicted_brackets)
-        self._gold_brackets += dist_reduce_sum(_gold_brackets)
-        self._predicted_brackets += dist_reduce_sum(_predicted_brackets)
+        if is_distributed():
+            device = torch.device("cuda" if dist.get_backend() == "nccl" else "cpu")
+            correct_predicted_brackets = torch.tensor(_correct_predicted_brackets).to(device)
+            predicted_brackets = torch.tensor(_predicted_brackets).to(device)
+            gold_brackets = torch.tensor(_gold_brackets).to(device)
+            dist.all_reduce(correct_predicted_brackets, op=dist.ReduceOp.SUM)
+            dist.all_reduce(predicted_brackets, op=dist.ReduceOp.SUM)
+            dist.all_reduce(gold_brackets, op=dist.ReduceOp.SUM)
+            _correct_predicted_brackets = correct_predicted_brackets.item()
+            _predicted_brackets = predicted_brackets.item()
+            _gold_brackets = gold_brackets.item()
 
+        self._correct_predicted_brackets += _correct_predicted_brackets
+        self._gold_brackets += _gold_brackets
+        self._predicted_brackets += _predicted_brackets
+
+    @overrides
     def get_metric(self, reset: bool = False):
         """
         # Returns
@@ -182,6 +199,7 @@ class EvalbBracketingScorer(Metric):
             "evalb_f1_measure": f1_measure,
         }
 
+    @overrides
     def reset(self):
         self._correct_predicted_brackets = 0.0
         self._gold_brackets = 0.0

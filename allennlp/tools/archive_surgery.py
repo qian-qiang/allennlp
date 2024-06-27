@@ -22,7 +22,8 @@ import tarfile
 from allennlp.common.file_utils import cached_path
 from allennlp.models.archival import CONFIG_NAME
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger()
+logger.setLevel(logging.ERROR)
 
 
 def main():
@@ -78,5 +79,4 @@ def main():
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.ERROR)
     main()

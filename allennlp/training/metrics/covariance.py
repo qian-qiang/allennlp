@@ -1,7 +1,7 @@
 import logging
 from typing import Optional
 
-
+from overrides import overrides
 import torch
 
 # import torch.distributed as dist
@@ -111,10 +111,10 @@ class Covariance(Metric):
 
         #     # Note: this gives an approximate aggregation of the covariance.
         #     device = gold_labels.device
-        #     delta_mean_prediction = torch.tensor(delta_mean_prediction, device=device)
-        #     delta_mean_label = torch.tensor(delta_mean_label, device=device)
-        #     delta_co_moment = torch.tensor(delta_co_moment, device=device)
-        #     _total_count = torch.tensor(updated_count, device=device)
+        #     delta_mean_prediction = torch.tensor(delta_mean_prediction).to(device)
+        #     delta_mean_label = torch.tensor(delta_mean_label).to(device)
+        #     delta_co_moment = torch.tensor(delta_co_moment).to(device)
+        #     _total_count = torch.tensor(updated_count).to(device)
         #     dist.all_reduce(delta_mean_prediction, op=dist.ReduceOp.SUM)
         #     dist.all_reduce(delta_mean_label, op=dist.ReduceOp.SUM)
         #     dist.all_reduce(delta_co_moment, op=dist.ReduceOp.SUM)
@@ -126,7 +126,7 @@ class Covariance(Metric):
         self._total_co_moment += delta_co_moment.item()
         self._total_count = updated_count
 
-    def get_metric(self, reset: bool = False) -> float:
+    def get_metric(self, reset: bool = False):
         """
         # Returns
 
@@ -139,6 +139,7 @@ class Covariance(Metric):
             self.reset()
         return covariance
 
+    @overrides
     def reset(self):
         self._total_prediction_mean = 0.0
         self._total_label_mean = 0.0

@@ -1,0 +1,10 @@
+commands	实现命令行功能
+common		一些通用函数，如读取参数，注册
+data		数据处理
+interpret	用于解释模型的结果，包括显著性图与对抗攻击
+models		抽象模型，类似于模板，还包含了分类与标注两个具体模型
+modules		用在处理文本上的模块集合，做了比较好的封装，作为组件被用于models
+nn			张量实用函数集合，例如初始化函数和激活函数
+predictors	模型预测
+tools		一些实用的脚本
+training	模型训练

@@ -1,7 +1,7 @@
 from typing import Dict, Optional, List, Any
 
 import numpy
-
+from overrides import overrides
 import torch
 from torch.nn.modules.linear import Linear
 import torch.nn.functional as F
@@ -106,8 +106,9 @@ class SimpleTagger(Model):
 
         initializer(self)
 
-    def forward(  # type: ignore
-        self,
+    @overrides
+    def forward(
+        self,  # type: ignore
         tokens: TextFieldTensors,
         tags: torch.LongTensor = None,
         metadata: List[Dict[str, Any]] = None,
@@ -179,6 +180,7 @@ class SimpleTagger(Model):
             output_dict["words"] = [x["words"] for x in metadata]
         return output_dict
 
+    @overrides
     def make_output_human_readable(
         self, output_dict: Dict[str, torch.Tensor]
     ) -> Dict[str, torch.Tensor]:
@@ -203,6 +205,7 @@ class SimpleTagger(Model):
         output_dict["tags"] = all_tags
         return output_dict
 
+    @overrides
     def get_metrics(self, reset: bool = False) -> Dict[str, float]:
         metrics_to_return = {
             metric_name: metric.get_metric(reset) for metric_name, metric in self.metrics.items()

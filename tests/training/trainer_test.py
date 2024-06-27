@@ -2,117 +2,53 @@ import copy
 import glob
 import json
 import os
+import re
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import math
 import pytest
 
 import torch
+from torch.utils.data import DataLoader
 from torch.nn.utils import clip_grad_norm_
+from allennlp.data.dataloader import PyTorchDataLoader
 
 from allennlp.common.checks import ConfigurationError
 from allennlp.common.params import Params
 from allennlp.common.testing import AllenNlpTestCase, requires_gpu, requires_multi_gpu
-from allennlp.data import Vocabulary, Instance, Token
-from allennlp.data.data_loaders import MultiProcessDataLoader, SimpleDataLoader, TensorDict
-from allennlp.data.dataset_readers import SequenceTaggingDatasetReader, DatasetReader
-from allennlp.data.token_indexers import SingleIdTokenIndexer
+from allennlp.data import Vocabulary
+from allennlp.data.dataloader import TensorDict
+from allennlp.data.dataset_readers import SequenceTaggingDatasetReader
 from allennlp.models.model import Model
 from allennlp.models.simple_tagger import SimpleTagger
 from allennlp.training import (
     GradientDescentTrainer,
     Checkpointer,
-)
-from allennlp.training.callbacks import (
+    TensorboardWriter,
+    BatchCallback,
+    EpochCallback,
     TrainerCallback,
     TrackEpochCallback,
-    TensorBoardCallback,
-    ConfidenceChecksCallback,
-    ConsoleLoggerCallback,
-    OnBackwardException,
-    ShouldValidateCallback,
 )
-from allennlp.training.callbacks.confidence_checks import ConfidenceCheckError
 from allennlp.training.learning_rate_schedulers import CosineWithRestarts
 from allennlp.training.learning_rate_schedulers import ExponentialLearningRateScheduler
 from allennlp.training.momentum_schedulers import MomentumScheduler
 from allennlp.training.moving_average import ExponentialMovingAverage
-from allennlp.data.fields import (
-    TextField,
-    IndexField,
-    MetadataField,
-    LabelField,
-    MultiLabelField,
-    SpanField,
-    FlagField,
-    AdjacencyField,
-    TensorField,
-)
-from allennlp.training.optimizers import Optimizer
-from allennlp.common.testing.confidence_check_test import (
-    FakeModelForTestingNormalizationBiasVerification,
-)
-
-
-class FakeDatasetReader(DatasetReader):
-    def __init__(self, total_instances, batch_size):
-        super().__init__()
-        self.total_instances = total_instances
-        self.batch_size = batch_size
-
-    def _read(self, file_path):
-        for i in range(self.total_instances):
-            yield self.text_to_instance(i, "label")
-
-    def text_to_instance(self, index: int, field_type: str):  # type: ignore
-        field = TextField(
-            [Token(t) for t in ["The", "number", "is", str(index), "."]],
-            token_indexers={"words": SingleIdTokenIndexer("words")},
-        )
-
-        return Instance(
-            {
-                "text": field,
-                "label": LabelField(index, skip_indexing=True),
-                "flag": FlagField(23),
-                "index": IndexField(index % self.batch_size, field),
-                "metadata": MetadataField({"some_key": "This will not be logged as a histogram."}),
-                "adjacency": AdjacencyField([(0, 1), (1, 2)], field),
-                "multilabel": MultiLabelField(["l1", "l2"]),
-                "span": SpanField(2, 3, field),
-                "tensor": TensorField(torch.randn(2, 3)),
-            }
-        )
-
-
-class FakeModel(Model):
-    def __init__(self, vocab):
-        super().__init__(vocab)
-        self.lin = torch.nn.Linear(1, 2)
-        self.loss_fn = torch.nn.MSELoss()
-
-    def forward(self, **kwargs):
-        out = kwargs["label"].sum().unsqueeze(-1)
-        out = out.type(torch.FloatTensor)
-        out = self.lin(out)
-        loss = out.sum()
-        return {"loss": loss}
+from allennlp.data import allennlp_collate
 
 
 class TrainerTestBase(AllenNlpTestCase):
     def setup_method(self):
         super().setup_method()
-        self.data_path = str(self.FIXTURES_ROOT / "data" / "sequence_tagging.tsv")
-        self.reader = SequenceTaggingDatasetReader(max_instances=4)
-        self.data_loader = MultiProcessDataLoader(self.reader, self.data_path, batch_size=2)
-        self.data_loader_lazy = MultiProcessDataLoader(
-            self.reader, self.data_path, batch_size=2, max_instances_in_memory=10
+        self.instances = SequenceTaggingDatasetReader().read(
+            self.FIXTURES_ROOT / "data" / "sequence_tagging.tsv"
         )
-        self.instances = list(self.data_loader.iter_instances())
-        self.vocab = Vocabulary.from_instances(self.instances)
-        self.data_loader.index_with(self.vocab)
-        self.data_loader_lazy.index_with(self.vocab)
+        self.instances_lazy = SequenceTaggingDatasetReader(lazy=True).read(
+            self.FIXTURES_ROOT / "data" / "sequence_tagging.tsv"
+        )
+        vocab = Vocabulary.from_instances(self.instances)
+        self.vocab = vocab
         self.model_params = Params(
             {
                 "text_field_embedder": {
@@ -123,30 +59,15 @@ class TrainerTestBase(AllenNlpTestCase):
         )
         self.model = SimpleTagger.from_params(vocab=self.vocab, params=self.model_params)
         self.optimizer = torch.optim.SGD(self.model.parameters(), 0.01, momentum=0.9)
-        self.validation_data_loader = MultiProcessDataLoader(
-            self.reader, self.data_path, batch_size=2
+        self.data_loader = DataLoader(self.instances, batch_size=2, collate_fn=allennlp_collate)
+        self.data_loader_lazy = DataLoader(
+            self.instances_lazy, batch_size=2, collate_fn=allennlp_collate
         )
-        self.validation_data_loader.index_with(self.vocab)
-
-
-class ZeroGradientsBackwardCallback(TrainerCallback):
-    """
-    Zeros all gradients after backpropagation.
-    """
-
-    def on_backward(
-        self,
-        trainer: "GradientDescentTrainer",
-        batch_outputs: Dict[str, torch.Tensor],
-        backward_called: bool,
-        **kwargs,
-    ) -> bool:
-        if backward_called:
-            raise OnBackwardException()
-        batch_outputs["loss"].backward()
-        for param in trainer.model.parameters():
-            param.grad.data.zero_()
-        return True
+        self.validation_data_loader = DataLoader(
+            self.instances, batch_size=2, collate_fn=allennlp_collate
+        )
+        self.instances.index_with(vocab)
+        self.instances_lazy.index_with(vocab)
 
 
 class TestTrainer(TrainerTestBase):
@@ -189,59 +110,6 @@ class TestTrainer(TrainerTestBase):
         assert "peak_worker_0_memory_MB" in metrics
         assert isinstance(metrics["peak_worker_0_memory_MB"], float)
         assert metrics["peak_worker_0_memory_MB"] > 0
-
-    def test_train_zero_gradients(self):
-        weights = {}
-        for name, param in self.model.named_parameters():
-            weights[name] = param.data.clone()
-
-        trainer = GradientDescentTrainer(
-            self.model,
-            self.optimizer,
-            self.data_loader,
-            num_epochs=2,
-            validation_data_loader=self.validation_data_loader,
-            callbacks=[ZeroGradientsBackwardCallback(serialization_dir=self.TEST_DIR)],
-        )
-        trainer.train()
-
-        # weights should be the same
-        for name, param in self.model.named_parameters():
-            assert torch.equal(weights[name], param.data)
-
-    def test_two_backward_callbacks(self):
-        class SecondBackwardCallback(TrainerCallback):
-            """
-            Changes all gradients to 1 after backpropagation.
-            """
-
-            def on_backward(
-                self,
-                trainer: "GradientDescentTrainer",
-                batch_outputs: Dict[str, torch.Tensor],
-                backward_called: bool,
-                **kwargs,
-            ) -> bool:
-                if backward_called:
-                    raise OnBackwardException()
-                batch_outputs["loss"].backward()
-                for param in trainer.model.parameters():
-                    param.grad = torch.ones_like(param.grad, device=param.grad.device)
-                return True
-
-        with pytest.raises(OnBackwardException):
-            trainer = GradientDescentTrainer(
-                self.model,
-                self.optimizer,
-                self.data_loader,
-                num_epochs=2,
-                validation_data_loader=self.validation_data_loader,
-                callbacks=[
-                    ZeroGradientsBackwardCallback(serialization_dir=self.TEST_DIR),
-                    SecondBackwardCallback(serialization_dir=self.TEST_DIR),
-                ],
-            )
-            trainer.train()
 
     def test_trainer_can_run_exponential_moving_average(self):
         moving_average = ExponentialMovingAverage(self.model.named_parameters(), decay=0.9999)
@@ -291,35 +159,42 @@ class TestTrainer(TrainerTestBase):
             num_epochs=num_epochs,
             serialization_dir=self.TEST_DIR,
         )
-        assert trainer._total_batches_completed == 0
+        assert trainer._batch_num_total == 0
         metrics = trainer.train()
         epoch = metrics["epoch"]
         assert epoch == num_epochs - 1
-        assert trainer._total_batches_completed == num_epochs * 2
+        assert trainer._batch_num_total == num_epochs * 2
 
     def test_data_loader_lazy_epoch_size_correct_custom_epoch_size(self):
-        self.data_loader_lazy.batches_per_epoch = 3
+        batches_per_epoch = 3
         num_epochs = 3
+        data_loader_custom_epoch_lazy = PyTorchDataLoader(
+            self.instances_lazy,
+            batch_size=2,
+            collate_fn=allennlp_collate,
+            batches_per_epoch=batches_per_epoch,
+        )
         trainer = GradientDescentTrainer(
             self.model,
             self.optimizer,
-            self.data_loader_lazy,
+            data_loader_custom_epoch_lazy,
             validation_data_loader=self.validation_data_loader,
             num_epochs=num_epochs,
             serialization_dir=self.TEST_DIR,
         )
-        assert trainer._total_batches_completed == 0
+        assert trainer._batch_num_total == 0
         metrics = trainer.train()
         epoch = metrics["epoch"]
         assert epoch == num_epochs - 1
-        assert trainer._total_batches_completed == num_epochs * 3
+        assert trainer._batch_num_total == num_epochs * batches_per_epoch
 
     def test_trainer_respects_epoch_size_equals_total(self):
         batches_per_epoch = 4
         num_epochs = 3
-        data_loader_equal_epoch = SimpleDataLoader(
+        data_loader_equal_epoch = PyTorchDataLoader(
             self.instances,
-            2,
+            batch_size=2,
+            collate_fn=allennlp_collate,
             batches_per_epoch=batches_per_epoch,
         )
         trainer = GradientDescentTrainer(
@@ -330,18 +205,19 @@ class TestTrainer(TrainerTestBase):
             num_epochs=num_epochs,
             serialization_dir=self.TEST_DIR,
         )
-        assert trainer._total_batches_completed == 0
+        assert trainer._batch_num_total == 0
         metrics = trainer.train()
         epoch = metrics["epoch"]
         assert epoch == num_epochs - 1
-        assert trainer._total_batches_completed == num_epochs * batches_per_epoch
+        assert trainer._batch_num_total == num_epochs * batches_per_epoch
 
     def test_trainer_respects_epoch_size_larger_tnan_total(self):
         batches_per_epoch = 7
         num_epochs = 3
-        data_loader_larger_epoch = SimpleDataLoader(
+        data_loader_larger_epoch = PyTorchDataLoader(
             self.instances,
-            2,
+            batch_size=2,
+            collate_fn=allennlp_collate,
             batches_per_epoch=batches_per_epoch,
         )
         trainer = GradientDescentTrainer(
@@ -352,18 +228,19 @@ class TestTrainer(TrainerTestBase):
             num_epochs=num_epochs,
             serialization_dir=self.TEST_DIR,
         )
-        assert trainer._total_batches_completed == 0
+        assert trainer._batch_num_total == 0
         metrics = trainer.train()
         epoch = metrics["epoch"]
         assert epoch == num_epochs - 1
-        assert trainer._total_batches_completed == num_epochs * batches_per_epoch
+        assert trainer._batch_num_total == num_epochs * batches_per_epoch
 
     def test_trainer_respects_epoch_size_smaller_tnan_total(self):
         batches_per_epoch = 1
         num_epochs = 2
-        data_loader_smaller_epoch = SimpleDataLoader(
+        data_loader_smaller_epoch = PyTorchDataLoader(
             self.instances,
-            2,
+            batch_size=2,
+            collate_fn=allennlp_collate,
             batches_per_epoch=batches_per_epoch,
         )
         trainer = GradientDescentTrainer(
@@ -374,11 +251,11 @@ class TestTrainer(TrainerTestBase):
             num_epochs=num_epochs,
             serialization_dir=self.TEST_DIR,
         )
-        assert trainer._total_batches_completed == 0
+        assert trainer._batch_num_total == 0
         metrics = trainer.train()
         epoch = metrics["epoch"]
         assert epoch == num_epochs - 1
-        assert trainer._total_batches_completed == num_epochs * batches_per_epoch
+        assert trainer._batch_num_total == num_epochs * batches_per_epoch
 
     def test_trainer_can_resume_training(self):
         trainer = GradientDescentTrainer(
@@ -388,10 +265,8 @@ class TestTrainer(TrainerTestBase):
             validation_data_loader=self.validation_data_loader,
             num_epochs=1,
             serialization_dir=self.TEST_DIR,
-            checkpointer=Checkpointer(self.TEST_DIR),
         )
         trainer.train()
-
         new_trainer = GradientDescentTrainer(
             self.model,
             self.optimizer,
@@ -399,11 +274,10 @@ class TestTrainer(TrainerTestBase):
             validation_data_loader=self.validation_data_loader,
             num_epochs=3,
             serialization_dir=self.TEST_DIR,
-            checkpointer=Checkpointer(self.TEST_DIR),
         )
-        new_trainer._maybe_restore_checkpoint()
 
-        assert new_trainer._start_after_epochs_completed == 1
+        epoch = new_trainer._restore_checkpoint()
+        assert epoch == 1
 
         tracker = trainer._metric_tracker
         assert tracker.is_best_so_far()
@@ -422,7 +296,6 @@ class TestTrainer(TrainerTestBase):
             num_epochs=1,
             serialization_dir=self.TEST_DIR,
             moving_average=moving_average,
-            checkpointer=Checkpointer(self.TEST_DIR),
         )
         trainer.train()
 
@@ -435,11 +308,10 @@ class TestTrainer(TrainerTestBase):
             num_epochs=3,
             serialization_dir=self.TEST_DIR,
             moving_average=new_moving_average,
-            checkpointer=Checkpointer(self.TEST_DIR),
         )
 
-        new_trainer._maybe_restore_checkpoint()
-        assert new_trainer._start_after_epochs_completed == 1
+        epoch = new_trainer._restore_checkpoint()
+        assert epoch == 1
 
         tracker = trainer._metric_tracker
         assert tracker.is_best_so_far()
@@ -458,31 +330,28 @@ class TestTrainer(TrainerTestBase):
             num_epochs=3,
             serialization_dir=self.TEST_DIR,
             patience=5,
-            validation_metric="+acc",
+            validation_metric="+test",
         )
         tracker = new_trainer._metric_tracker
 
         # when it is the only metric it should be considered the best
         new_tracker = copy.deepcopy(tracker)
-        new_tracker.add_metrics({"acc": 1})
+        new_tracker.add_metric(1)
         assert new_tracker.is_best_so_far()
 
         # when it is the same as one before it it is not considered the best
         new_tracker = copy.deepcopy(tracker)
-        for acc in [0.3, 0.3, 0.3, 0.2, 0.5, 0.1, 0.3]:
-            new_tracker.add_metrics({"acc": acc})
+        new_tracker.add_metrics([0.3, 0.3, 0.3, 0.2, 0.5, 0.1, 0.3])
         assert not new_tracker.is_best_so_far()
 
         # when it is the best it is considered the best
         new_tracker = copy.deepcopy(tracker)
-        for acc in [0.3, 0.3, 0.3, 0.2, 0.5, 0.1, 13]:
-            new_tracker.add_metrics({"acc": acc})
+        new_tracker.add_metrics([0.3, 0.3, 0.3, 0.2, 0.5, 0.1, 13])
         assert new_tracker.is_best_so_far()
 
         # when it is not the the best it is not considered the best
         new_tracker = copy.deepcopy(tracker)
-        for acc in [0.3, 0.3, 0.3, 0.2, 0.5, 0.1, 0.0013]:
-            new_tracker.add_metrics({"acc": acc})
+        new_tracker.add_metrics([0.3, 0.3, 0.3, 0.2, 0.5, 0.1, 0.0013])
         assert not new_tracker.is_best_so_far()
 
     def test_metric_only_considered_best_so_far_when_strictly_better_than_those_before_it_decreasing_metric(
@@ -496,31 +365,28 @@ class TestTrainer(TrainerTestBase):
             num_epochs=3,
             serialization_dir=self.TEST_DIR,
             patience=5,
-            validation_metric="-acc",
+            validation_metric="-test",
         )
         tracker = new_trainer._metric_tracker
 
         # when it is the only metric it should be considered the best
         new_tracker = copy.deepcopy(tracker)
-        new_tracker.add_metrics({"acc": 1})
+        new_tracker.add_metric(1)
         assert new_tracker.is_best_so_far()
 
         # when it is the same as one before it it is not considered the best
         new_tracker = copy.deepcopy(tracker)
-        for acc in [0.3, 0.3, 0.3, 0.2, 0.5, 0.1, 0.3]:
-            new_tracker.add_metrics({"acc": acc})
+        new_tracker.add_metrics([0.3, 0.3, 0.3, 0.2, 0.5, 0.1, 0.3])
         assert not new_tracker.is_best_so_far()
 
         # when it is the best it is considered the best
         new_tracker = copy.deepcopy(tracker)
-        for acc in [0.3, 0.3, 0.3, 0.2, 0.5, 0.1, 0.0013]:
-            new_tracker.add_metrics({"acc": acc})
+        new_tracker.add_metrics([0.3, 0.3, 0.3, 0.2, 0.5, 0.1, 0.0013])
         assert new_tracker.is_best_so_far()
 
         # when it is not the the best it is not considered the best
         new_tracker = copy.deepcopy(tracker)
-        for acc in [0.3, 0.3, 0.3, 0.2, 0.5, 0.1, 13]:
-            new_tracker.add_metrics({"acc": acc})
+        new_tracker.add_metrics([0.3, 0.3, 0.3, 0.2, 0.5, 0.1, 13])
 
     def test_should_stop_early_with_increasing_metric(self):
         new_trainer = GradientDescentTrainer(
@@ -531,23 +397,21 @@ class TestTrainer(TrainerTestBase):
             num_epochs=3,
             serialization_dir=self.TEST_DIR,
             patience=5,
-            validation_metric="+acc",
+            validation_metric="+test",
         )
 
         tracker = new_trainer._metric_tracker
 
         new_tracker = copy.deepcopy(tracker)
-        for acc in [0.5, 0.3, 0.2, 0.1, 0.4, 0.4]:
-            new_tracker.add_metrics({"acc": acc})
+        new_tracker.add_metrics([0.5, 0.3, 0.2, 0.1, 0.4, 0.4])
         assert new_tracker.should_stop_early()
 
         new_tracker = copy.deepcopy(tracker)
-        for acc in [0.3, 0.3, 0.3, 0.2, 0.5, 0.1]:
-            new_tracker.add_metrics({"acc": acc})
+        new_tracker.add_metrics([0.3, 0.3, 0.3, 0.2, 0.5, 0.1])
         assert not new_tracker.should_stop_early()
 
     def test_should_stop_early_with_flat_lining_metric(self):
-        flatline = [{"acc": 0.2}] * 6
+        flatline = [0.2] * 6
         tracker = GradientDescentTrainer(
             self.model,
             self.optimizer,
@@ -556,10 +420,9 @@ class TestTrainer(TrainerTestBase):
             num_epochs=3,
             serialization_dir=self.TEST_DIR,
             patience=5,
-            validation_metric="+acc",
+            validation_metric="+test",
         )._metric_tracker
-        for m in flatline:
-            tracker.add_metrics(m)
+        tracker.add_metrics(flatline)
         assert tracker.should_stop_early
 
         tracker = GradientDescentTrainer(
@@ -570,10 +433,9 @@ class TestTrainer(TrainerTestBase):
             num_epochs=3,
             serialization_dir=self.TEST_DIR,
             patience=5,
-            validation_metric="-acc",
+            validation_metric="-test",
         )._metric_tracker
-        for m in flatline:
-            tracker.add_metrics(m)
+        tracker.add_metrics(flatline)
         assert tracker.should_stop_early
 
     def test_should_stop_early_with_decreasing_metric(self):
@@ -585,23 +447,20 @@ class TestTrainer(TrainerTestBase):
             num_epochs=3,
             serialization_dir=self.TEST_DIR,
             patience=5,
-            validation_metric="-acc",
+            validation_metric="-test",
         )
         tracker = new_trainer._metric_tracker
 
         new_tracker = copy.deepcopy(tracker)
-        for acc in [0.02, 0.3, 0.2, 0.1, 0.4, 0.4]:
-            new_tracker.add_metrics({"acc": acc})
+        new_tracker.add_metrics([0.02, 0.3, 0.2, 0.1, 0.4, 0.4])
         assert new_tracker.should_stop_early()
 
         new_tracker = copy.deepcopy(tracker)
-        for acc in [0.3, 0.3, 0.2, 0.1, 0.4, 0.5]:
-            new_tracker.add_metrics({"acc": acc})
+        new_tracker.add_metrics([0.3, 0.3, 0.2, 0.1, 0.4, 0.5])
         assert not new_tracker.should_stop_early()
 
         new_tracker = copy.deepcopy(tracker)
-        for acc in [0.1, 0.3, 0.2, 0.1, 0.4, 0.5]:
-            new_tracker.add_metrics({"acc": acc})
+        new_tracker.add_metrics([0.1, 0.3, 0.2, 0.1, 0.4, 0.5])
         assert new_tracker.should_stop_early()
 
     def test_should_stop_early_with_early_stopping_disabled(self):
@@ -613,11 +472,10 @@ class TestTrainer(TrainerTestBase):
             validation_data_loader=self.validation_data_loader,
             num_epochs=100,
             patience=None,
-            validation_metric="+acc",
+            validation_metric="+test",
         )
         tracker = trainer._metric_tracker
-        for m in [{"acc": float(i)} for i in reversed(range(20))]:
-            tracker.add_metrics(m)
+        tracker.add_metrics([float(i) for i in reversed(range(20))])
         assert not tracker.should_stop_early()
 
         # Decreasing metric
@@ -628,11 +486,10 @@ class TestTrainer(TrainerTestBase):
             validation_data_loader=self.validation_data_loader,
             num_epochs=100,
             patience=None,
-            validation_metric="-acc",
+            validation_metric="-test",
         )
         tracker = trainer._metric_tracker
-        for m in [{"acc": float(i)} for i in range(20)]:
-            tracker.add_metrics(m)
+        tracker.add_metrics([float(i) for i in range(20)])
         assert not tracker.should_stop_early()
 
     def test_should_stop_early_with_invalid_patience(self):
@@ -650,7 +507,7 @@ class TestTrainer(TrainerTestBase):
                     validation_data_loader=self.validation_data_loader,
                     num_epochs=100,
                     patience=patience,
-                    validation_metric="+acc",
+                    validation_metric="+test",
                 )
 
     def test_trainer_can_run_and_resume_with_momentum_scheduler(self):
@@ -667,7 +524,6 @@ class TestTrainer(TrainerTestBase):
             validation_data_loader=self.validation_data_loader,
             num_epochs=4,
             serialization_dir=self.TEST_DIR,
-            checkpointer=Checkpointer(self.TEST_DIR),
         )
         trainer.train()
 
@@ -684,10 +540,9 @@ class TestTrainer(TrainerTestBase):
             validation_data_loader=self.validation_data_loader,
             num_epochs=6,
             serialization_dir=self.TEST_DIR,
-            checkpointer=Checkpointer(self.TEST_DIR),
         )
-        new_trainer._maybe_restore_checkpoint()
-        new_trainer._start_after_epochs_completed = 4
+        epoch = new_trainer._restore_checkpoint()
+        assert epoch == 4
         assert new_trainer._momentum_scheduler.last_epoch == 3
         new_trainer.train()
 
@@ -704,32 +559,6 @@ class TestTrainer(TrainerTestBase):
         )
         trainer.train()
 
-    def test_trainer_sends_metric_to_lr_scheduler(self):
-        from allennlp.training.learning_rate_schedulers import ReduceOnPlateauLearningRateScheduler
-
-        class RecordMetricLearningRateScheduler(ReduceOnPlateauLearningRateScheduler):
-            def __init__(self, optimizer: Optimizer):
-                super(RecordMetricLearningRateScheduler, self).__init__(optimizer)
-                self.recordings: List[float] = []
-
-            def step(self, metric: float = None) -> None:
-                self.recordings.append(metric)
-                super().step(metric)
-
-        lr_scheduler = RecordMetricLearningRateScheduler(self.optimizer)
-        trainer = GradientDescentTrainer(
-            model=self.model,
-            optimizer=self.optimizer,
-            data_loader=self.data_loader,
-            learning_rate_scheduler=lr_scheduler,
-            validation_metric="-loss",
-            validation_data_loader=self.validation_data_loader,
-            num_epochs=2,
-        )
-        trainer.train()
-
-        assert all([value != 0 for value in lr_scheduler.recordings])
-
     def test_trainer_can_resume_with_lr_scheduler(self):
         lr_scheduler = CosineWithRestarts(self.optimizer, t_initial=5)
         trainer = GradientDescentTrainer(
@@ -740,7 +569,6 @@ class TestTrainer(TrainerTestBase):
             validation_data_loader=self.validation_data_loader,
             num_epochs=2,
             serialization_dir=self.TEST_DIR,
-            checkpointer=Checkpointer(self.TEST_DIR),
         )
         trainer.train()
 
@@ -753,10 +581,9 @@ class TestTrainer(TrainerTestBase):
             validation_data_loader=self.validation_data_loader,
             num_epochs=4,
             serialization_dir=self.TEST_DIR,
-            checkpointer=Checkpointer(self.TEST_DIR),
         )
-        new_trainer._maybe_restore_checkpoint()
-        assert new_trainer._start_after_epochs_completed == 2
+        epoch = new_trainer._restore_checkpoint()
+        assert epoch == 2
         assert new_trainer._learning_rate_scheduler.last_epoch == 1
         new_trainer.train()
 
@@ -786,12 +613,9 @@ class TestTrainer(TrainerTestBase):
             self.data_loader,
             num_epochs=3,
             serialization_dir=self.TEST_DIR,
-            callbacks=[
-                TensorBoardCallback(
-                    serialization_dir=self.TEST_DIR,
-                    distribution_interval=2,
-                )
-            ],
+            tensorboard_writer=TensorboardWriter(
+                serialization_dir=self.TEST_DIR, histogram_interval=2
+            ),
         )
         trainer.train()
 
@@ -802,20 +626,17 @@ class TestTrainer(TrainerTestBase):
             self.data_loader,
             num_epochs=5,
             serialization_dir=self.TEST_DIR,
-            checkpointer=Checkpointer(serialization_dir=self.TEST_DIR, keep_most_recent_by_count=3),
+            checkpointer=Checkpointer(
+                serialization_dir=self.TEST_DIR, num_serialized_models_to_keep=3
+            ),
         )
         trainer.train()
 
         # Now check the serialized files
-        expected = [(3, 0), (4, 0), (5, 0)]
-
-        file_names = glob.glob(os.path.join(self.TEST_DIR, "model_state_e*_b*"))
-        epochs = [Checkpointer._parse_model_state_path(fname) for fname in file_names]
-        assert sorted(epochs) == expected
-
-        file_names = glob.glob(os.path.join(self.TEST_DIR, "training_state_e*_b*"))
-        epochs = [Checkpointer._parse_training_state_path(fname) for fname in file_names]
-        assert sorted(epochs) == expected
+        for prefix in ["model_state_epoch_*", "training_state_epoch_*"]:
+            file_names = glob.glob(os.path.join(self.TEST_DIR, prefix))
+            epochs = [int(re.search(r"_([0-9])\.th", fname).group(1)) for fname in file_names]
+            assert sorted(epochs) == [2, 3, 4]
 
     def test_trainer_saves_metrics_every_epoch(self):
         trainer = GradientDescentTrainer(
@@ -825,7 +646,9 @@ class TestTrainer(TrainerTestBase):
             validation_data_loader=self.validation_data_loader,
             num_epochs=5,
             serialization_dir=self.TEST_DIR,
-            checkpointer=Checkpointer(serialization_dir=self.TEST_DIR, keep_most_recent_by_count=3),
+            checkpointer=Checkpointer(
+                serialization_dir=self.TEST_DIR, num_serialized_models_to_keep=3
+            ),
         )
         trainer.train()
 
@@ -841,9 +664,12 @@ class TestTrainer(TrainerTestBase):
         # To test:
         #   Create an fake data loader that sleeps for 2.5 second per epoch, so the total
         #   training time for one epoch is slightly greater then 2.5 seconds.
+        #   Run for 6 epochs, keeping the last 2 models, models also kept every 5 seconds.
+        #   Check the resulting checkpoints.  Should then have models at epochs
+        #       2, 4, plus the last two at 5 and 6.
 
         class SlowDataLoader:
-            data_loader = SimpleDataLoader(self.instances, batch_size=2)
+            data_loader = DataLoader(self.instances, batch_size=2, collate_fn=allennlp_collate)
 
             def __iter__(self):
                 time.sleep(2.5)
@@ -852,9 +678,6 @@ class TestTrainer(TrainerTestBase):
             def __len__(self):
                 return len(self.data_loader)
 
-            def set_target_device(self, _):
-                pass
-
         trainer = GradientDescentTrainer(
             self.model,
             self.optimizer,
@@ -862,141 +685,85 @@ class TestTrainer(TrainerTestBase):
             num_epochs=6,
             serialization_dir=self.TEST_DIR,
             checkpointer=Checkpointer(
-                save_completed_epochs=False,
                 serialization_dir=self.TEST_DIR,
-                keep_most_recent_by_count=4,
-                save_every_num_seconds=5,
+                num_serialized_models_to_keep=2,
+                keep_serialized_model_every_num_seconds=5,
             ),
         )
         trainer.train()
 
         # Now check the serialized files
-        expected = [(1, 1), (3, 1), (5, 1)]
-
-        file_names = glob.glob(os.path.join(self.TEST_DIR, "model_state_e*_b*"))
-        epochs = [Checkpointer._parse_model_state_path(fname) for fname in file_names]
-        assert sorted(epochs) == expected
-
-        file_names = glob.glob(os.path.join(self.TEST_DIR, "training_state_e*_b*"))
-        epochs = [Checkpointer._parse_training_state_path(fname) for fname in file_names]
-        assert sorted(epochs) == expected
+        for prefix in ["model_state_epoch_*", "training_state_epoch_*"]:
+            file_names = glob.glob(os.path.join(self.TEST_DIR, prefix))
+            epochs = [int(re.search(r"_([0-9])\.th", fname).group(1)) for fname in file_names]
+            # epoch N has N-1 in file name
+            assert sorted(epochs) == [1, 3, 4, 5]
 
     def test_trainer_can_log_learning_rates_tensorboard(self):
-        data_loader = SimpleDataLoader(self.instances, 4)
+        data_loader = DataLoader(self.instances, batch_size=4, collate_fn=allennlp_collate)
         trainer = GradientDescentTrainer(
             self.model,
             self.optimizer,
             data_loader,
             num_epochs=2,
             serialization_dir=self.TEST_DIR,
-            callbacks=[
-                TensorBoardCallback(
-                    serialization_dir=self.TEST_DIR,
-                    summary_interval=2,
-                    should_log_learning_rate=True,
-                )
-            ],
+            tensorboard_writer=TensorboardWriter(
+                serialization_dir=self.TEST_DIR,
+                should_log_learning_rate=True,
+                summary_interval=2,
+            ),
         )
 
         trainer.train()
 
-    def test_confidence_check_callback(self):
-        model_with_bias = FakeModelForTestingNormalizationBiasVerification(use_bias=True)
-        inst = Instance({"x": TensorField(torch.rand(3, 1, 4))})
-        data_loader = SimpleDataLoader([inst, inst], 2)
-        trainer = GradientDescentTrainer(
-            model_with_bias,
-            self.optimizer,
-            data_loader,
-            num_epochs=1,
-            serialization_dir=self.TEST_DIR,
-            callbacks=[ConfidenceChecksCallback(serialization_dir=self.TEST_DIR)],
-        )
-        with pytest.raises(ConfidenceCheckError):
-            trainer.train()
-
-    def test_confidence_check_default(self):
-        model_with_bias = FakeModelForTestingNormalizationBiasVerification(use_bias=True)
-        inst = Instance({"x": TensorField(torch.rand(3, 1, 4))})
-        data_loader = SimpleDataLoader([inst, inst], 2)
-        trainer = GradientDescentTrainer.from_partial_objects(
-            model_with_bias,
-            serialization_dir=self.TEST_DIR,
-            data_loader=data_loader,
-            num_epochs=1,
-        )
-        with pytest.raises(ConfidenceCheckError):
-            trainer.train()
-
-        trainer = GradientDescentTrainer.from_partial_objects(
-            model_with_bias,
-            serialization_dir=self.TEST_DIR,
-            data_loader=data_loader,
-            num_epochs=1,
-            run_confidence_checks=False,
-        )
-
-        # Check is not run, so no failure.
-        trainer.train()
-
-    @pytest.mark.parametrize("checkpoint_to_keep", range(20))
-    def test_trainer_restores_and_makes_same_results(self, checkpoint_to_keep: int):
-        batch_size = 2
-        data_loader = SimpleDataLoader(self.instances, batch_size)
-        num_epochs = 10
-        num_batches = len(self.instances) // batch_size
+    def test_trainer_saves_models_at_specified_interval(self):
+        data_loader = DataLoader(self.instances, batch_size=4, collate_fn=allennlp_collate)
 
         trainer = GradientDescentTrainer(
             self.model,
             self.optimizer,
             data_loader,
-            validation_data_loader=data_loader,
-            num_epochs=num_epochs,
+            num_epochs=2,
             serialization_dir=self.TEST_DIR,
             checkpointer=Checkpointer(
                 serialization_dir=self.TEST_DIR,
-                save_every_num_seconds=0.0001,
-                keep_most_recent_by_count=20,
+                model_save_interval=0.0001,
+                num_serialized_models_to_keep=10,
             ),
         )
 
-        original_metrics = trainer.train()
+        trainer.train()
 
         # Now check the serialized files for models saved during the epoch.
-        file_names = glob.glob(os.path.join(self.TEST_DIR, "model_state_e*_b*"))
-        checkpoints = [Checkpointer._parse_model_state_path(fname) for fname in file_names]
-        checkpoints.sort()
+        prefix = "model_state_epoch_*"
+        file_names = sorted(glob.glob(os.path.join(self.TEST_DIR, prefix)))
+        epochs = [re.search(r"_([0-9\.\-]+)\.th", fname).group(1) for fname in file_names]
+        # We should have checkpoints at the end of each epoch and during each, e.g.
+        # [0.timestamp, 0, 1.timestamp, 1]
+        assert len(epochs) == 4
+        assert epochs[3] == "1"
+        assert "." in epochs[0]
 
-        expected = [(e, b) for e in range(num_epochs) for b in range(num_batches + 1)]
-        del expected[0]
-        expected.append((num_epochs, 0))
-        expected = expected[-20:]
-        assert checkpoints == expected
-
-        # Now make certain we can restore from checkpoint in the middle of an epoch.
-        # To do so, remove the checkpoint at the end of epochs.
-        for i, checkpoint in enumerate(checkpoints):
-            if i != checkpoint_to_keep:
-                os.remove(trainer._checkpointer._model_state_path(*checkpoint))
-                os.remove(trainer._checkpointer._training_state_path(*checkpoint))
+        # Now make certain we can restore from timestamped checkpoint.
+        # To do so, remove the checkpoint from the end of epoch 1&2, so
+        # that we are forced to restore from the timestamped checkpoints.
+        for k in range(2):
+            os.remove(os.path.join(self.TEST_DIR, "model_state_epoch_{}.th".format(k)))
+            os.remove(os.path.join(self.TEST_DIR, "training_state_epoch_{}.th".format(k)))
         os.remove(os.path.join(self.TEST_DIR, "best.th"))
 
-        restored_trainer = GradientDescentTrainer(
+        restore_trainer = GradientDescentTrainer(
             self.model,
             self.optimizer,
             self.data_loader,
-            validation_data_loader=data_loader,
-            num_epochs=num_epochs,
+            num_epochs=2,
             serialization_dir=self.TEST_DIR,
-            checkpointer=Checkpointer(
-                serialization_dir=self.TEST_DIR,
-                save_every_num_seconds=0.0001,
-                keep_most_recent_by_count=10,
-            ),
+            checkpointer=Checkpointer(serialization_dir=self.TEST_DIR, model_save_interval=0.0001),
         )
-        restored_metrics = restored_trainer.train()
-
-        assert original_metrics["best_validation_loss"] == restored_metrics["best_validation_loss"]
+        epoch = restore_trainer._restore_checkpoint()
+        assert epoch == 2
+        # One batch per epoch.
+        assert restore_trainer._batch_num_total == 2
 
     def test_trainer_saves_and_loads_best_validation_metrics_correctly_1(self):
         # Use -loss and run 1 epoch of original-training, and one of restored-training
@@ -1009,10 +776,9 @@ class TestTrainer(TrainerTestBase):
             validation_metric="-loss",
             num_epochs=1,
             serialization_dir=self.TEST_DIR,
-            checkpointer=Checkpointer(self.TEST_DIR),
         )
         trainer.train()
-        _ = trainer._maybe_restore_checkpoint()
+        _ = trainer._restore_checkpoint()
         best_epoch_1 = trainer._metric_tracker.best_epoch
         best_validation_metrics_epoch_1 = trainer._metric_tracker.best_epoch_metrics
         # best_validation_metrics_epoch_1: {'accuracy': 0.75, 'accuracy3': 1.0, 'loss': 0.6243013441562653}
@@ -1028,10 +794,9 @@ class TestTrainer(TrainerTestBase):
             validation_metric="-loss",
             num_epochs=2,
             serialization_dir=self.TEST_DIR,
-            checkpointer=Checkpointer(self.TEST_DIR),
         )
         restore_trainer.train()
-        _ = restore_trainer._maybe_restore_checkpoint()
+        _ = restore_trainer._restore_checkpoint()
         best_epoch_2 = restore_trainer._metric_tracker.best_epoch
         best_validation_metrics_epoch_2 = restore_trainer._metric_tracker.best_epoch_metrics
 
@@ -1050,11 +815,10 @@ class TestTrainer(TrainerTestBase):
             validation_metric="+loss",
             num_epochs=1,
             serialization_dir=self.TEST_DIR,
-            checkpointer=Checkpointer(self.TEST_DIR),
         )
         trainer.train()
 
-        _ = trainer._maybe_restore_checkpoint()
+        _ = trainer._restore_checkpoint()
         best_epoch_1 = trainer._metric_tracker.best_epoch
         best_validation_metrics_epoch_1 = trainer._metric_tracker.best_epoch_metrics
         # best_validation_metrics_epoch_1: {'accuracy': 0.75, 'accuracy3': 1.0, 'loss': 0.6243013441562653}
@@ -1070,10 +834,9 @@ class TestTrainer(TrainerTestBase):
             validation_metric="+loss",
             num_epochs=2,
             serialization_dir=self.TEST_DIR,
-            checkpointer=Checkpointer(self.TEST_DIR),
         )
         restore_trainer.train()
-        _ = restore_trainer._maybe_restore_checkpoint()
+        _ = restore_trainer._restore_checkpoint()
         best_epoch_2 = restore_trainer._metric_tracker.best_epoch
         best_validation_metrics_epoch_2 = restore_trainer._metric_tracker.best_epoch_metrics
 
@@ -1094,7 +857,6 @@ class TestTrainer(TrainerTestBase):
             validation_metric="+loss",
             num_epochs=1,
             serialization_dir=self.TEST_DIR,
-            checkpointer=Checkpointer(self.TEST_DIR),
         )
         training_metrics = original_trainer.train()
 
@@ -1107,7 +869,6 @@ class TestTrainer(TrainerTestBase):
             validation_metric="+loss",
             num_epochs=2,
             serialization_dir=self.TEST_DIR,
-            checkpointer=Checkpointer(self.TEST_DIR),
         )
         restored_metrics = restored_trainer.train()
 
@@ -1120,6 +881,37 @@ class TestTrainer(TrainerTestBase):
         assert training_metrics["best_validation_loss"] == restored_metrics["best_validation_loss"]
         assert training_metrics["best_epoch"] == 0
         assert training_metrics["validation_loss"] > restored_metrics["validation_loss"]
+
+    def test_restoring_works_with_older_checkpointing(self):
+        trainer = GradientDescentTrainer(
+            self.model,
+            self.optimizer,
+            self.data_loader,
+            validation_data_loader=self.validation_data_loader,
+            num_epochs=3,
+            serialization_dir=self.TEST_DIR,
+            checkpointer=Checkpointer(
+                serialization_dir=self.TEST_DIR, num_serialized_models_to_keep=4
+            ),
+        )
+        trainer.train()
+
+        for index in range(3):
+            path = str(self.TEST_DIR / "training_state_epoch_{}.th".format(index))
+            state = torch.load(path)
+            state.pop("metric_tracker")
+            state.pop("batch_num_total")
+            state["val_metric_per_epoch"] = [0.4, 0.1, 0.8]
+            torch.save(state, path)
+
+        next_epoch = trainer._restore_checkpoint()
+        best_epoch = trainer._metric_tracker.best_epoch
+
+        # Loss decreases in 3 epochs, but because we hard fed the val metrics as above:
+        assert next_epoch == 3
+        assert best_epoch == 1
+        assert trainer._metric_tracker._best_so_far == 0.1
+        assert trainer._metric_tracker._epochs_with_no_improvement == 1
 
     def test_trainer_can_run_gradient_accumulation(self):
         instances = list(self.instances)
@@ -1135,16 +927,73 @@ class TestTrainer(TrainerTestBase):
         )
         assert trainer._num_gradient_accumulation_steps == steps_to_accumulate
 
-        trainer.train()
+        metrics = trainer.train()
 
-        num_batches_trained_per_epoch = (
-            trainer._total_batches_completed // trainer._epochs_completed
-        )
+        num_batches_trained_per_epoch = trainer._batch_num_total // (metrics["training_epochs"] + 1)
         num_batches_expected = math.ceil(
             math.ceil(len(instances) / self.data_loader.batch_size) / steps_to_accumulate
         )
 
         assert num_batches_trained_per_epoch == num_batches_expected
+
+    def test_batch_callback_is_called_at_every_batch(self):
+        class FakeBatchCallback(BatchCallback):
+            def __call__(
+                self,
+                trainer: "GradientDescentTrainer",
+                batch_inputs: List[List[TensorDict]],
+                batch_outputs: List[Dict[str, Any]],
+                batch_metrics: Dict[str, Any],
+                epoch: int,
+                batch_number: int,
+                is_training: bool,
+                is_master: bool,
+            ) -> None:
+                if not hasattr(trainer, "batch_callback_calls"):
+                    trainer.batch_callback_calls = []  # type: ignore
+                trainer.batch_callback_calls.append((epoch, batch_number, is_training))  # type: ignore
+
+        trainer = GradientDescentTrainer(
+            self.model,
+            self.optimizer,
+            self.data_loader,
+            num_epochs=2,
+            validation_data_loader=self.validation_data_loader,
+            batch_callbacks=[FakeBatchCallback()],
+        )
+        trainer.train()
+        expected_calls = [
+            (epoch, batch_number + 1, is_train)
+            for epoch in range(2)
+            for is_train in (True, False)
+            for batch_number in range(len(self.instances) // 2)
+        ]
+        assert trainer.batch_callback_calls == expected_calls
+
+    def test_epoch_callback_is_called_at_every_epoch(self):
+        class FakeEpochCallback(EpochCallback):
+            def __call__(
+                self,
+                trainer: "GradientDescentTrainer",
+                metrics: Dict[str, Any],
+                epoch: int,
+                is_master: bool,
+            ) -> None:
+                if not hasattr(trainer, "epoch_callback_calls"):
+                    trainer.epoch_callback_calls = []  # type: ignore
+                trainer.epoch_callback_calls.append(epoch)  # type: ignore
+
+        trainer = GradientDescentTrainer(
+            self.model,
+            self.optimizer,
+            self.data_loader,
+            num_epochs=4,
+            validation_data_loader=self.validation_data_loader,
+            epoch_callbacks=[FakeEpochCallback()],
+        )
+        trainer.train()
+        expected_calls = [epoch for epoch in range(-1, 4)]
+        assert trainer.epoch_callback_calls == expected_calls
 
     def test_track_epoch_callback(self):
         num_epochs = 4
@@ -1154,35 +1003,49 @@ class TestTrainer(TrainerTestBase):
             self.data_loader,
             num_epochs=num_epochs,
             validation_data_loader=self.validation_data_loader,
-            callbacks=[TrackEpochCallback(serialization_dir=self.TEST_DIR)],
+            epoch_callbacks=[TrackEpochCallback()],
         )
         trainer.train()
         assert trainer.model.epoch == num_epochs
 
+    def test_end_callback_is_called_at_end(self):
+        class FakeEndCallback(EpochCallback):
+            def __call__(
+                self,
+                trainer: "GradientDescentTrainer",
+                metrics: Dict[str, Any],
+                epoch: int,
+                is_master: bool,
+            ) -> None:
+                if not hasattr(trainer, "end_callback_calls"):
+                    trainer.end_callback_calls = []  # type: ignore
+                trainer.end_callback_calls.append(epoch)  # type: ignore
+
+        trainer = GradientDescentTrainer(
+            self.model,
+            self.optimizer,
+            self.data_loader,
+            num_epochs=4,
+            validation_data_loader=self.validation_data_loader,
+            end_callbacks=[FakeEndCallback()],
+        )
+        trainer.train()
+        expected_calls = [3]
+        assert trainer.end_callback_calls == expected_calls
+
     def test_trainer_callback_is_called_everywhere(self):
         class FakeTrainerCallback(TrainerCallback):
-            def on_start(
-                self, trainer: "GradientDescentTrainer", is_primary: bool = True, **kwargs
-            ) -> None:
-                if not hasattr(trainer, "start_callback_is_fired_first"):
-                    trainer.start_callback_is_fired_first = True  # type: ignore
-
             def on_batch(
                 self,
                 trainer: "GradientDescentTrainer",
-                batch_inputs: List[TensorDict],
+                batch_inputs: List[List[TensorDict]],
                 batch_outputs: List[Dict[str, Any]],
                 batch_metrics: Dict[str, Any],
                 epoch: int,
                 batch_number: int,
                 is_training: bool,
-                is_primary: bool = True,
-                batch_grad_norm: Optional[float] = None,
-                **kwargs,
+                is_master: bool,
             ) -> None:
-                if not hasattr(trainer, "start_callback_is_fired_first"):
-                    trainer.start_callback_is_fired_first = False  # type: ignore
-
                 if not hasattr(trainer, "batch_callback_calls"):
                     trainer.batch_callback_calls = []  # type: ignore
                 trainer.batch_callback_calls.append((epoch, batch_number, is_training))  # type: ignore
@@ -1192,12 +1055,8 @@ class TestTrainer(TrainerTestBase):
                 trainer: "GradientDescentTrainer",
                 metrics: Dict[str, Any],
                 epoch: int,
-                is_primary: bool = True,
-                **kwargs,
+                is_master: bool,
             ) -> None:
-                if not hasattr(trainer, "start_callback_is_fired_first"):
-                    trainer.start_callback_is_fired_first = False  # type: ignore
-
                 if not hasattr(trainer, "epoch_callback_calls"):
                     trainer.epoch_callback_calls = []  # type: ignore
                 trainer.epoch_callback_calls.append(epoch)  # type: ignore
@@ -1205,14 +1064,10 @@ class TestTrainer(TrainerTestBase):
             def on_end(
                 self,
                 trainer: "GradientDescentTrainer",
-                metrics: Dict[str, Any] = None,
-                epoch: int = None,
-                is_primary: bool = True,
-                **kwargs,
+                metrics: Dict[str, Any],
+                epoch: int,
+                is_master: bool,
             ) -> None:
-                if not hasattr(trainer, "start_callback_is_fired_first"):
-                    trainer.start_callback_is_fired_first = False  # type: ignore
-
                 if not hasattr(trainer, "end_callback_calls"):
                     trainer.end_callback_calls = []  # type: ignore
                 trainer.end_callback_calls.append(epoch)  # type: ignore
@@ -1223,7 +1078,7 @@ class TestTrainer(TrainerTestBase):
             self.data_loader,
             num_epochs=2,
             validation_data_loader=self.validation_data_loader,
-            callbacks=[FakeTrainerCallback(serialization_dir=self.TEST_DIR)],
+            trainer_callbacks=[FakeTrainerCallback()],
         )
         trainer.train()
         expected_batch_calls = [
@@ -1232,32 +1087,35 @@ class TestTrainer(TrainerTestBase):
             for is_train in (True, False)
             for batch_number in range(len(self.instances) // 2)
         ]
-        expected_epoch_calls = [epoch for epoch in range(0, 2)]
+        expected_epoch_calls = [epoch for epoch in range(-1, 2)]
         expected_end_calls = [1]
 
-        assert trainer.start_callback_is_fired_first
         assert trainer.batch_callback_calls == expected_batch_calls
         assert trainer.epoch_callback_calls == expected_epoch_calls
         assert trainer.end_callback_calls == expected_end_calls
 
     def test_total_loss_is_average_of_batch_loss(self):
+
         batches_per_epoch = 3
 
-        self.data_loader_lazy.batches_per_epoch = 3
+        data_loader_custom_epoch_lazy = PyTorchDataLoader(
+            self.instances_lazy,
+            batch_size=2,
+            collate_fn=allennlp_collate,
+            batches_per_epoch=batches_per_epoch,
+        )
 
-        class FakeOnBatchCallback(TrainerCallback):
-            def on_batch(
+        class FakeBatchCallback(BatchCallback):
+            def __call__(
                 self,
                 trainer: "GradientDescentTrainer",
-                batch_inputs: List[TensorDict],
+                batch_inputs: List[List[TensorDict]],
                 batch_outputs: List[Dict[str, Any]],
                 batch_metrics: Dict[str, Any],
                 epoch: int,
                 batch_number: int,
                 is_training: bool,
-                is_primary: bool = True,
-                batch_grad_norm: Optional[float] = None,
-                **kwargs,
+                is_master: bool,
             ) -> None:
                 if not hasattr(trainer, "batch_losses"):
                     trainer.batch_losses = []  # type: ignore
@@ -1266,120 +1124,13 @@ class TestTrainer(TrainerTestBase):
         trainer = GradientDescentTrainer(
             self.model,
             self.optimizer,
-            self.data_loader_lazy,
+            data_loader_custom_epoch_lazy,
             num_epochs=1,
-            callbacks=[FakeOnBatchCallback(serialization_dir=self.TEST_DIR)],
+            batch_callbacks=[FakeBatchCallback()],
         )
         metrics = trainer.train()
 
         assert metrics["training_loss"] == float(sum(trainer.batch_losses) / batches_per_epoch)
-
-    def test_trainer_can_log_batch_inputs(self):
-        total_instances = 1000
-        batch_size = 25
-
-        reader = FakeDatasetReader(total_instances, batch_size)
-        data_loader = SimpleDataLoader.from_dataset_reader(
-            reader, "fake_path", batch_size=batch_size
-        )
-        instances = list(data_loader.iter_instances())
-        vocab = Vocabulary.from_instances(instances)
-        data_loader.index_with(vocab)
-        model = FakeModel(vocab)
-        optimizer = torch.optim.SGD(model.parameters(), 0.01, momentum=0.9)
-
-        trainer = GradientDescentTrainer(
-            model,
-            optimizer,
-            data_loader,
-            num_epochs=2,
-            serialization_dir=self.TEST_DIR,
-            callbacks=[
-                TensorBoardCallback(
-                    serialization_dir=self.TEST_DIR,
-                    distribution_interval=2,
-                )
-            ],
-        )
-        trainer.train()
-
-    def test_console_log_callback(self):
-        total_instances = 1000
-        batch_size = 25
-
-        reader = FakeDatasetReader(total_instances, batch_size)
-        data_loader = SimpleDataLoader.from_dataset_reader(
-            reader, "fake_path", batch_size=batch_size
-        )
-        instances = list(data_loader.iter_instances())
-        vocab = Vocabulary.from_instances(instances)
-        data_loader.index_with(vocab)
-        model = FakeModel(vocab)
-        optimizer = torch.optim.SGD(model.parameters(), 0.01, momentum=0.9)
-
-        trainer = GradientDescentTrainer(
-            model,
-            optimizer,
-            data_loader,
-            num_epochs=3,
-            serialization_dir=self.TEST_DIR,
-            callbacks=[
-                ConsoleLoggerCallback.from_params(
-                    Params({"should_log_inputs": True}),
-                    serialization_dir=self.TEST_DIR,
-                )
-            ],
-        )
-        trainer.train()
-
-    def test_should_validate_callback(self):
-        total_instances = 1000
-        batch_size = 25
-
-        reader = FakeDatasetReader(total_instances, batch_size)
-        data_loader = SimpleDataLoader.from_dataset_reader(
-            reader, "fake_path", batch_size=batch_size
-        )
-        instances = list(data_loader.iter_instances())
-        vocab = Vocabulary.from_instances(instances)
-        data_loader.index_with(vocab)
-        model = FakeModel(vocab)
-        optimizer = torch.optim.SGD(model.parameters(), 0.01, momentum=0.9)
-        callback = ShouldValidateCallback.from_params(
-            Params({"validation_start": 4, "validation_interval": 2}),
-            serialization_dir=self.TEST_DIR,
-        )
-
-        # Check that training works with the callback
-        trainer = GradientDescentTrainer(
-            model,
-            optimizer,
-            data_loader,
-            num_epochs=6,
-            serialization_dir=self.TEST_DIR,
-            callbacks=[callback],
-        )
-        trainer.train()
-
-        # Shouldn't validate on the first epoch as it's before the 'validation_start'
-        callback.on_start(trainer)
-        assert not trainer._should_validate_this_epoch
-
-        # Satisfies 'validation_interval' but not 'validation_start'
-        callback.on_epoch(trainer, metrics={}, epoch=1)
-        assert not trainer._should_validate_this_epoch
-
-        # Doesn't satisfy 'validation_start' or 'validation_interval'
-        callback.on_epoch(trainer, metrics={}, epoch=2)
-        assert not trainer._should_validate_this_epoch
-
-        # Satisfies both 'validation_start' and 'validation_interval'
-        callback.on_epoch(trainer, metrics={}, epoch=3)
-        assert trainer._should_validate_this_epoch
-
-        # Check that final validation happens on the last epoch
-        callback.on_end(trainer)
-        assert trainer._should_validate_this_epoch
 
 
 @requires_gpu

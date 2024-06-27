@@ -1,55 +1,53 @@
-#### 与测试相关的包 ##########
+#### TESTING-RELATED PACKAGES ####
 
 # Checks style, syntax, and other useful errors.
-flake8>=4.0.1
+flake8
 
 # Static type checking
-mypy==0.961
+mypy==0.790
 
 # Automatic code formatting
-black==22.6.0
+black==20.8b1
 
 # Allows generation of coverage reports with pytest.
-pytest-cov>=3.0.0
+pytest-cov
 
 # Allows codecov to generate coverage reports
-coverage[toml]>=6.4
-codecov>=2.1.12
+coverage
+codecov
 
 # Optional dependencies, which we install for testing purposes.
 matplotlib>=2.2.3
 
 # For mocking HTTP requests/responses.
-responses>=0.21
+responses>=0.7
+# This needs to be pinned below 1.26.0 for responses to work until
+# https://github.com/getsentry/responses/issues/354 is resolved.
+urllib3<1.26.0
 
 # For running tests that aren't 100% reliable.
-flaky>=3.7.0
+flaky
 
 # For running benchmarks.
-pytest-benchmark>=3.4.1
+pytest-benchmark
 
 #### DOC-RELATED PACKAGES ####
 
 # YAML manipulation
-ruamel.yaml>=0.17.17
+ruamel.yaml
 
 # Generating markdown files from Python modules.
-pydoc-markdown<4.4.0
-databind.core<=1.5.3
-databind-json<=1.5.3
-docspec<1.2.0,>1.0.1
-docspec-python<1.2.0,>1.0.1
+git+https://github.com/NiklasRosenstein/pydoc-markdown.git@f0bf8af1db4f11581c19d206d4ed1ab34b4854c1
+nr.databind.core<0.0.17
+nr.interface<0.0.4
 
-mkdocs==1.3.0
-mkdocs-material>=5.5.0,<8.4.0
+mkdocs==1.1.2
+mkdocs-material>=5.5.0,<6.2.0
 markdown-include==0.6.0
-
-# Narrowing constraints
-pymdown-extensions>=9.5
 
 #### PACKAGE-UPLOAD PACKAGES ####
 
 # Pypi uploads
-twine>=1.11.0,<5.0.0
+twine>=1.11.0
 setuptools
 wheel

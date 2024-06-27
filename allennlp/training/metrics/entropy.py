@@ -1,9 +1,10 @@
 from typing import Optional
 
-
+from overrides import overrides
 import torch
+import torch.distributed as dist
 
-from allennlp.nn.util import dist_reduce_sum
+from allennlp.common.util import is_distributed
 from allennlp.training.metrics.metric import Metric
 
 
@@ -13,8 +14,9 @@ class Entropy(Metric):
         self._entropy = 0.0
         self._count = 0
 
-    def __call__(  # type: ignore
-        self,
+    @overrides
+    def __call__(
+        self,  # type: ignore
         logits: torch.Tensor,
         mask: Optional[torch.BoolTensor] = None,
     ):
@@ -27,6 +29,7 @@ class Entropy(Metric):
             A masking tensor of shape (batch_size, ...).
         """
         logits, mask = self.detach_tensors(logits, mask)
+        device = logits.device
 
         if mask is None:
             mask = torch.ones(logits.size()[:-1], device=logits.device).bool()
@@ -37,10 +40,17 @@ class Entropy(Metric):
         entropy = weighted_negative_likelihood.sum(-1)
 
         _entropy = entropy.sum() / mask.sum()
+        _count = 1
 
-        self._entropy += dist_reduce_sum(_entropy).item()
-        self._count += dist_reduce_sum(1)
+        if is_distributed():
+            count = torch.tensor(_count).to(device)
+            dist.all_reduce(_entropy, op=dist.ReduceOp.SUM)
+            dist.all_reduce(count, op=dist.ReduceOp.SUM)
+            _count = count.item()
+        self._entropy += _entropy.item()
+        self._count += _count
 
+    @overrides
     def get_metric(self, reset: bool = False):
         """
         # Returns
@@ -52,6 +62,7 @@ class Entropy(Metric):
             self.reset()
         return {"entropy": average_value}
 
+    @overrides
     def reset(self):
         self._entropy = 0.0
         self._count = 0

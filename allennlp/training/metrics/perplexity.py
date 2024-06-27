@@ -1,3 +1,4 @@
+from overrides import overrides
 import math
 
 from allennlp.training.metrics.average import Average
@@ -16,6 +17,7 @@ class Perplexity(Average):
     average perplexity of the batches.
     """
 
+    @overrides
     def get_metric(self, reset: bool = False):
         """
         # Returns

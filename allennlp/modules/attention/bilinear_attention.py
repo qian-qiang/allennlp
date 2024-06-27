@@ -1,3 +1,4 @@
+from overrides import overrides
 import torch
 from torch.nn.parameter import Parameter
 
@@ -49,6 +50,7 @@ class BilinearAttention(Attention):
         torch.nn.init.xavier_uniform_(self._weight_matrix)
         self._bias.data.fill_(0)
 
+    @overrides
     def _forward_internal(self, vector: torch.Tensor, matrix: torch.Tensor) -> torch.Tensor:
         intermediate = vector.mm(self._weight_matrix).unsqueeze(1)
         return self._activation(intermediate.bmm(matrix.transpose(1, 2)).squeeze(1) + self._bias)

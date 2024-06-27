@@ -10,23 +10,19 @@ MD_DOCS_CONF_SRC = mkdocs-skeleton.yml
 MD_DOCS_TGT = site/
 MD_DOCS_EXTRAS = $(addprefix $(MD_DOCS_ROOT),README.md CHANGELOG.md CONTRIBUTING.md)
 
-TORCH_INSTALL = pip install torch torchvision -c constraints.txt
-DOCKER_TORCH_VERSION = 1.12.0-cuda11.3-python3.8
-DOCKER_TEST_TORCH_VERSION = 1.12.0-cuda11.3-python3.8
-
 DOCKER_TAG = latest
 DOCKER_IMAGE_NAME = allennlp/allennlp:$(DOCKER_TAG)
 DOCKER_TEST_IMAGE_NAME = allennlp/test:$(DOCKER_TAG)
+DOCKER_TORCH_VERSION = 'torch==1.7.0'
+# Our self-hosted runner currently has CUDA 11.0.
+DOCKER_TEST_TORCH_VERSION = 'torch==1.7.0+cu110 -f https://download.pytorch.org/whl/torch_stable.html'
 DOCKER_RUN_CMD = docker run --rm \
 		-v $$HOME/.allennlp:/root/.allennlp \
-		-v $$HOME/.cache/huggingface:/root/.cache/huggingface \
+		-v $$HOME/.cache/torch:/root/.cache/torch \
 		-v $$HOME/nltk_data:/root/nltk_data
 
-# 这些 NLTK 包被 'checklist' 模块使用。如果在导入 `checklist` 时找不到它们，它们会被自动下载，但最好提前下载，以避免潜在的竞争条件。
-NLTK_DOWNLOAD_CMD = python -c 'import nltk; [nltk.download(p) for p in ("wordnet", "wordnet_ic", "sentiwordnet", "omw", "omw-1.4")]'
-
-ifeq ($(shell uname),Darwin)  #检查当前操作系统是否是 macOS（Darwin 是 macOS 的内核）
-ifeq ($(shell which gsed),)  #如果当前操作系统是 macOS，并且 gsed 没有安装（通过 which gsed 命令来检查是否可以找到 gsed），则显示错误信息
+ifeq ($(shell uname),Darwin)
+ifeq ($(shell which gsed),)
 $(error Please install GNU sed with 'brew install gnu-sed')
 else
 SED = gsed
@@ -35,7 +31,6 @@ else
 SED = sed
 endif
 
-# 导入 AllenNLP 库中的 VERSION 变量，并打印出带有版本号的字符串。
 .PHONY : version
 version :
 	@python -c 'from allennlp.version import VERSION; print(f"AllenNLP v{VERSION}")'
@@ -48,50 +43,32 @@ check-for-cuda :
 # Testing helpers.
 #
 
-.PHONY : flake8
-flake8 :
-	flake8 allennlp tests scripts 
+.PHONY : lint
+lint :
+	flake8 .
 
 .PHONY : format
 format :
-	black --check allennlp tests scripts 
+	black --check .
 
 .PHONY : typecheck
 typecheck :
-	mypy allennlp tests scripts --cache-dir=/dev/null
+	mypy . --cache-dir=/dev/null
 
 .PHONY : test
 test :
-	pytest --color=yes -v -rf --durations=40 \
+	pytest --color=yes -rf --durations=40
+
+.PHONY : test-with-cov
+test-with-cov :
+	pytest --color=yes -rf --durations=40 \
 			--cov-config=.coveragerc \
 			--cov=$(SRC) \
 			--cov-report=xml
 
-.PHONY : test-without-checklist
-test-without-checklist :
-	pytest --color=yes -v -rf --durations=40 \
-			--cov-config=.coveragerc \
-			--cov=$(SRC) \
-			--cov-report=xml \
-			--ignore-glob=*checklist*
-
-.PHONY : test-checklist
-test-checklist :
-	pytest --color=yes -v -rf --durations=40 \
-			--cov-config=.coveragerc \
-			--cov=$(SRC) \
-			--cov-report=xml \
-			tests/ \
-			-k checklist
-
-
-.PHONY : gpu-tests
-gpu-tests : check-for-cuda
-	pytest --color=yes -v -rf --durations=20 \
-			--cov-config=.coveragerc \
-			--cov=$(SRC) \
-			--cov-report=xml \
-			-m gpu
+.PHONY : gpu-test
+gpu-test : check-for-cuda
+	pytest --color=yes -v -rf -m gpu
 
 .PHONY : benchmarks
 benchmarks :
@@ -101,23 +78,15 @@ benchmarks :
 # Setup helpers
 #
 
-.PHONY : download-extras
-download-extras :
-	$(NLTK_DOWNLOAD_CMD)
-
 .PHONY : install
 install :
+	# Ensure pip, setuptools, and wheel are up-to-date.
+	pip install --upgrade pip setuptools wheel
 	# Due to a weird thing with pip, we may need egg-info before running `pip install -e`.
 	# See https://github.com/pypa/pip/issues/4537.
-	# python setup.py install_egg_info
-	# Install torch ecosystem first.
-	$(TORCH_INSTALL)
-	pip install --upgrade pip
-	pip install pip-tools
-	pip-compile requirements.in -o final_requirements.txt --allow-unsafe --rebuild --verbose
-	pip install -e . -r final_requirements.txt
-	# These nltk packages are used by the 'checklist' module.
-	$(NLTK_DOWNLOAD_CMD)
+	python setup.py install_egg_info
+	# Install allennlp as editable and all dependencies.
+	pip install --upgrade --upgrade-strategy eager -e . -r dev-requirements.txt
 
 #
 # Documention helpers.
@@ -138,13 +107,12 @@ serve-docs : build-all-api-docs $(MD_DOCS_CONF) $(MD_DOCS) $(MD_DOCS_EXTRAS)
 .PHONY : update-docs
 update-docs : $(MD_DOCS) $(MD_DOCS_EXTRAS)
 
-#以下规则确保了所有的 API 文档都会被按照指定的结构和路径生成。
 $(MD_DOCS_ROOT)README.md : README.md
 	cp $< $@
 	# Alter the relative path of the README image for the docs.
 	$(SED) -i '1s/docs/./' $@
 	# Alter external doc links to relative links.
-	$(SED) -i 's|https://docs.allennlp.org/main/api/|api/|' $@
+	$(SED) -i 's|https://docs.allennlp.org/master/api/|api/|' $@
 
 $(MD_DOCS_ROOT)%.md : %.md
 	cp $< $@
@@ -179,11 +147,9 @@ docker-image :
 		--build-arg TORCH=$(DOCKER_TORCH_VERSION) \
 		-t $(DOCKER_IMAGE_NAME) .
 
-DOCKER_GPUS = --gpus all
-
 .PHONY : docker-run
 docker-run :
-	$(DOCKER_RUN_CMD) $(DOCKER_GPUS) $(DOCKER_IMAGE_NAME) $(ARGS)
+	$(DOCKER_RUN_CMD) --gpus all $(DOCKER_IMAGE_NAME) $(ARGS)
 
 .PHONY : docker-test-image
 docker-test-image :
@@ -195,4 +161,4 @@ docker-test-image :
 
 .PHONY : docker-test-run
 docker-test-run :
-	$(DOCKER_RUN_CMD) --shm-size 2G $(DOCKER_GPUS) $(DOCKER_TEST_IMAGE_NAME) $(ARGS)
+	$(DOCKER_RUN_CMD) --gpus all $(DOCKER_TEST_IMAGE_NAME) $(ARGS)

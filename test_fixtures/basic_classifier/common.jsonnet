@@ -1,5 +1,6 @@
 {
     "dataset_reader": {
+        "lazy": false,
         "type": "text_classification_json",
         "tokenizer": {
             "type": "spacy"
@@ -16,6 +17,7 @@
     "train_data_path": "test_fixtures/data/text_classification_json/imdb_corpus.jsonl",
     "validation_data_path": "test_fixtures/data/text_classification_json/imdb_corpus.jsonl",
     "data_loader": {
+
         "batch_sampler": {
             "type": "bucket",
             "batch_size": 5

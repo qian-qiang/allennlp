@@ -1,5 +1,5 @@
 import torch
-
+from overrides import overrides
 
 from allennlp.common.registrable import Registrable
 
@@ -16,6 +16,7 @@ class SpanExtractor(torch.nn.Module, Registrable):
     spans.
     """
 
+    @overrides
     def forward(
         self,
         sequence_tensor: torch.FloatTensor,

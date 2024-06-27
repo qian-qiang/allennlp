@@ -1,4 +1,0 @@
-#!
--c constraints.txt
--r dev-requirements.txt
--r requirements.txt

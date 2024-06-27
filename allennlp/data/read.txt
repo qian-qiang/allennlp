@@ -1,0 +1,103 @@
+batch.py:主要作用是管理和处理一组 Instance 对象，以便将它们转换为可以输入到模型中的张量
+dataloader.py:对 PyTorch 的 DataLoader 的扩展和封装 这个文件的作用是为 AllenNLP 框架提供一个可注册、可配置的自定义数据加载器，方便用户在处理大规模数据集时进行批处理和数据加载。
+instance.py:Instance 类是 AllenNLP 中用于表示单个数据实例的类，包含多个字段，并提供了对这些字段进行操作的方法，如添加字段、统计词汇项、索引字段、获取填充长度、转换为张量字典等。
+vocabulary.py:这个文件提供了一个完整的词汇表管理系统，支持从实例和文件中构建、扩展和保存词汇表，并提供了丰富的 API 供其他模块使用
+
+
+data这个模块就是随着sentence这个字段从读取到映射成词向量这整个流程来讲解。
+
+sentence字段的处理分为以下几个阶段：
+1. tokenizer -> 分词
+2. Token -> 转化为单个Token对象
+3. Instance -> 转化为Instance实例
+4. Iterator -> 并组装成batch模式
+5. model.forward -> 塞给模型去执行
+6. token_embedders -> 将idx转化成词向量
+
+
+1. tokenizer -> 分词
+这个过程是在文本读取的时候执行的。在DatasetReader初始化的时候，会将tokenizer传递到构造函数当中，没有的话就初始化一个默认分词器。这个分词器可以是一个，也可以是多个，取决于在参数列表里面传递的个数。
+
+对于英文分词，allennlp有内置的WordTokenizer，可是中文分词的话，就需要自己手动构造一个：继承Tokenizer，然后注册。这样就可以在配置文件中通过type找到定制分词器。
+
+eg : "I love cat" -> ["I", "love", "cat"]
+
+
+2. Token -> 转化成单个Token对象
+如果看过Token源码就会知道，其核心存储着text，text_id,分别代表着分词的文本以及索引。
+
+这个过程比较简单，没有什么逻辑。
+
+eg : ["I", "love", "cat"] -> [Token("I"), Token("love"), Token("cat")]
+
+
+3. Instance -> 转化为Instance实例
+这个过程一般是在DatasetReader的text_to_instance函数中完成，并针对不同字段转化成不同的Field。
+
+tokens = [Token("I"), Token("love"), Token("cat")]
+token_indexers = {
+    "word_token": SingleIdTokenIndexer(),
+    "character_token": TokenCharactersIndexer()
+}
+instance = {
+    "sentence": TextField(tokens, token_indexers)
+}
+
+
+4. Iterator -> 组装成batch模式
+这个过程或许看不见，可是逻辑基本上固定，如无特殊需求，无需定制。
+
+将Instance转化成idx的伪代码如下所示：
+
+instance = {
+    "sentence": {
+        "word_token": ["I", "love", "cat"] -> torch.Tensor([23, 55, 67]),
+        "character_token": [["I"], ["l", "o", "v", "e"],["c", "a", "t"]] -> torch.Tensor([[23], [34, 78, 35, 36],[13, 74, 26]])
+    }
+}
+然而，Iterator看似简单，可还有一些细节我想与大家聊聊：
+
+在batch数据的时候，同batch中不同长度的数据是需要pad
+为了pad过程的性能，可优先将长度相近的文本放置在同一个batch中随机打乱数据
+Allennlp已经内置了几个DataIterator，几乎不需要你自己重写，除非你在batch的过程中，完成一些创新性的小trick。
+
+示例代码如下：
+
+from allennlp.data.iterators import BucketIterator
+
+iterator = BucketIterator(batch_size=config.batch_size,
+                          biggest_batch_first=True,
+                          sorting_keys=[("tokens", "num_tokens")],
+                         )
+iterator.index_with(vocab)
+sorting_keys 能够提升padding过程效率。
+index_with(vocab)非常重要：给token_indexers配置vocabulary。这一步千万不要给忘记了为什么要这样做呢？
+token_indexers是在dataset_reader初始化的时候才存在的，而vocabulary是需要基于dataset_reader读取的Instance集合才能够进行构建的，故此处矛盾，无法指定。
+token_indexers并非不能提取成一个单独的模块来指定Vocabulary，可从软件设计的角度来看，Field依赖于token_indexers，需要在初始化的时候就指定，故无法设计成一个单独的模块。
+在iterator中指定vocabulary，然后由iterator将其传递给token_indexer的tokens_to_indices这个函数，此处的一个小trick就解决来依赖性的一个问题。
+
+
+5. model.forward -> 模型的参数
+Instance经过token_indexers转化成索引之后，由Iterator组装成batch数据，然后塞给模型的forward函数。
+
+token_embedders = {
+    "word_token": TokenEmbedder(embedding_dim = 23),
+    "character_token": TokenEmbedder(embedding_dim = 27)
+}
+
+text_field_embedders = BaseTextFieldEmbedder(token_embedders)
+
+def forward(self,sentence: Dict[str,torch.Tensor]):
+    sentence_embedding = text_field_embedders(sentence)
+
+上述伪代码很简单的，不过需要注意几点：
+ 1）text_field_embedders参数token_embedders的关键字和token_indexers的关键字必须要保持一致。
+ 2）多种TokenEmbedders对同一个文本分别做处理并映射到词向量后，将其拼接到一起。比如上述两个token_embedder维度为23和27，sentence_embedding的维度就为50。通过简单的几行代码就可以完成很复杂的词向量拼接的功能。
+
+
+6. token_embedders -> 词向量映射
+其实如何将将文本索引映射到词向量，第五点就已经说了。其核心需要注意的就是： - token_indexers和token_embedders都是字典类型，且键值必须保持一致 - token_embedders处理后的词向量是拼接到一起（这个特性非常棒）
+
+至此，我们跟随着sentence字段从读取到映射成词向量整个流程都已经聊完了，相信都已经掌握了。
+
+至此，我已经将模型执行之前所有的注意点都给聊完了。

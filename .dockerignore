@@ -3,6 +3,3 @@
 **/__pycache__
 .gitignore
 .git
-.coverage
-.benchmarks
-.mypy_cache

@@ -1,26 +1,24 @@
 """
 Utilities for working with the local dataset cache.
 """
-import bz2
-import gzip
-import lzma
-import weakref
-from contextlib import contextmanager
+
 import glob
-import io
 import os
 import logging
+import tempfile
 import json
-from abc import ABC
 from collections import defaultdict
+from dataclasses import dataclass, asdict
 from datetime import timedelta
 from fnmatch import fnmatch
 from os import PathLike
+from urllib.parse import urlparse
 from pathlib import Path
 from typing import (
     Optional,
     Tuple,
     Union,
+    IO,
     Callable,
     Set,
     List,
@@ -28,30 +26,24 @@ from typing import (
     Iterable,
     Dict,
     NamedTuple,
-    MutableMapping,
 )
-from weakref import WeakValueDictionary
+from hashlib import sha256
+from functools import wraps
+from zipfile import ZipFile, is_zipfile
+import tarfile
 import shutil
-import pickle
 import time
-import warnings
 
-import cached_path as _cached_path
-from cached_path import (  # noqa: F401
-    resource_to_filename as _resource_to_filename,
-    check_tarfile,
-    is_url_or_existing_file,
-    find_latest_cached as _find_latest_cached,
-)
-from cached_path.cache_file import CacheFile
-from cached_path.common import PathOrStr
-from cached_path.file_lock import FileLock
-from cached_path.meta import Meta as _Meta
-import torch
-import numpy as np
-import lmdb
-from torch import Tensor
+import boto3
+import botocore
+from botocore.exceptions import ClientError, EndpointConnectionError
+from filelock import FileLock
+import requests
+from requests.adapters import HTTPAdapter
+from requests.exceptions import ConnectionError
+from requests.packages.urllib3.util.retry import Retry
 
+from allennlp.common.tqdm import Tqdm
 
 logger = logging.getLogger(__name__)
 
@@ -71,12 +63,46 @@ if os.path.exists(DEPRECATED_CACHE_DIRECTORY):
     )
 
 
+def _resource_to_filename(resource: str, etag: str = None) -> str:
+    """
+    Convert a `resource` into a hashed filename in a repeatable way.
+    If `etag` is specified, append its hash to the resources's, delimited
+    by a period.
+    """
+    resource_bytes = resource.encode("utf-8")
+    resource_hash = sha256(resource_bytes)
+    filename = resource_hash.hexdigest()
+
+    if etag:
+        etag_bytes = etag.encode("utf-8")
+        etag_hash = sha256(etag_bytes)
+        filename += "." + etag_hash.hexdigest()
+
+    return filename
+
+
 def filename_to_url(filename: str, cache_dir: Union[str, Path] = None) -> Tuple[str, str]:
     """
     Return the url and etag (which may be `None`) stored for `filename`.
     Raise `FileNotFoundError` if `filename` or its stored metadata do not exist.
     """
-    return _cached_path.filename_to_url(filename, cache_dir=cache_dir or CACHE_DIRECTORY)
+    if cache_dir is None:
+        cache_dir = CACHE_DIRECTORY
+
+    cache_path = os.path.join(cache_dir, filename)
+    if not os.path.exists(cache_path):
+        raise FileNotFoundError("file {} not found".format(cache_path))
+
+    meta_path = cache_path + ".json"
+    if not os.path.exists(meta_path):
+        raise FileNotFoundError("file {} not found".format(meta_path))
+
+    with open(meta_path) as meta_file:
+        metadata = json.load(meta_file)
+    url = metadata["url"]
+    etag = metadata["etag"]
+
+    return url, etag
 
 
 def cached_path(
@@ -86,34 +112,15 @@ def cached_path(
     force_extract: bool = False,
 ) -> str:
     """
-    Given something that might be a URL or local path, determine which.
-    If it's a remote resource, download the file and cache it, and
-    then return the path to the cached file. If it's already a local path,
-    make sure the file exists and return the path.
-
-    For URLs, "http://", "https://", "s3://", "gs://", and "hf://" are all supported.
-    The latter corresponds to the HuggingFace Hub.
-
-    For example, to download the PyTorch weights for the model `epwalsh/bert-xsmall-dummy`
-    on HuggingFace, you could do:
-
-    ```python
-    cached_path("hf://epwalsh/bert-xsmall-dummy/pytorch_model.bin")
-    ```
-
-    For paths or URLs that point to a tarfile or zipfile, you can also add a path
-    to a specific file to the `url_or_filename` preceeded by a "!", and the archive will
-    be automatically extracted (provided you set `extract_archive` to `True`),
-    returning the local path to the specific file. For example:
-
-    ```python
-    cached_path("model.tar.gz!weights.th", extract_archive=True)
-    ```
+    Given something that might be a URL (or might be a local path),
+    determine which. If it's a URL, download the file and cache it, and
+    return the path to the cached file. If it's already a local path,
+    make sure the file exists and then return the path.
 
     # Parameters
 
     url_or_filename : `Union[str, Path]`
-        A URL or path to parse and possibly download.
+        A URL or local file to parse and possibly download.
 
     cache_dir : `Union[str, Path]`, optional (default = `None`)
         The directory to cache downloads.
@@ -125,306 +132,438 @@ def cached_path(
     force_extract : `bool`, optional (default = `False`)
         If `True` and the file is an archive file, it will be extracted regardless
         of whether or not the extracted directory already exists.
-
-        !!! Warning
-            Use this flag with caution! This can lead to race conditions if used
-            from multiple processes on the same file.
     """
-    return str(
-        _cached_path.cached_path(
-            url_or_filename,
-            cache_dir=cache_dir or CACHE_DIRECTORY,
-            extract_archive=extract_archive,
-            force_extract=force_extract,
-        )
-    )
+    if cache_dir is None:
+        cache_dir = CACHE_DIRECTORY
+
+    cache_dir = os.path.expanduser(cache_dir)
+    os.makedirs(cache_dir, exist_ok=True)
+
+    if not isinstance(url_or_filename, str):
+        url_or_filename = str(url_or_filename)
+
+    file_path: str
+
+    # If we're using the /a/b/foo.zip!c/d/file.txt syntax, handle it here.
+    exclamation_index = url_or_filename.find("!")
+    if extract_archive and exclamation_index >= 0:
+        archive_path = url_or_filename[:exclamation_index]
+        file_name = url_or_filename[exclamation_index + 1 :]
+
+        # Call 'cached_path' recursively now to get the local path to the archive itself.
+        cached_archive_path = cached_path(archive_path, cache_dir, True, force_extract)
+        if not os.path.isdir(cached_archive_path):
+            raise ValueError(
+                f"{url_or_filename} uses the ! syntax, but does not specify an archive file."
+            )
+
+        # Now return the full path to the desired file within the extracted archive,
+        # provided it exists.
+        file_path = os.path.join(cached_archive_path, file_name)
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"file {file_name} not found within {archive_path}")
+
+        return file_path
+
+    parsed = urlparse(url_or_filename)
+
+    extraction_path: Optional[str] = None
+
+    if parsed.scheme in ("http", "https", "s3"):
+        # URL, so get it from the cache (downloading if necessary)
+        file_path = get_from_cache(url_or_filename, cache_dir)
+
+        if extract_archive and (is_zipfile(file_path) or tarfile.is_tarfile(file_path)):
+            # This is the path the file should be extracted to.
+            # For example ~/.allennlp/cache/234234.21341 -> ~/.allennlp/cache/234234.21341-extracted
+            extraction_path = file_path + "-extracted"
+
+    else:
+        url_or_filename = os.path.expanduser(url_or_filename)
+
+        if os.path.exists(url_or_filename):
+            # File, and it exists.
+            file_path = url_or_filename
+            # Normalize the path.
+            url_or_filename = os.path.abspath(url_or_filename)
+
+            if extract_archive and (is_zipfile(file_path) or tarfile.is_tarfile(file_path)):
+                # We'll use a unique directory within the cache to root to extract the archive to.
+                # The name of the directoy is a hash of the resource file path and it's modification
+                # time. That way, if the file changes, we'll know when to extract it again.
+                extraction_name = (
+                    _resource_to_filename(url_or_filename, str(os.path.getmtime(file_path)))
+                    + "-extracted"
+                )
+                extraction_path = os.path.join(cache_dir, extraction_name)
+
+        elif parsed.scheme == "":
+            # File, but it doesn't exist.
+            raise FileNotFoundError(f"file {url_or_filename} not found")
+
+        else:
+            # Something unknown
+            raise ValueError(f"unable to parse {url_or_filename} as a URL or as a local path")
+
+    if extraction_path is not None:
+        # If the extracted directory already exists (and is non-empty), then no
+        # need to extract again unless `force_extract=True`.
+        if os.path.isdir(extraction_path) and os.listdir(extraction_path) and not force_extract:
+            return extraction_path
+
+        # Extract it.
+        with FileLock(extraction_path + ".lock"):
+            logger.info("Extracting %s to %s", url_or_filename, extraction_path)
+            shutil.rmtree(extraction_path, ignore_errors=True)
+
+            # We extract first to a temporary directory in case something goes wrong
+            # during the extraction process so we don't end up with a corrupted cache.
+            tmp_extraction_dir = tempfile.mkdtemp(dir=os.path.split(extraction_path)[0])
+            try:
+                if is_zipfile(file_path):
+                    with ZipFile(file_path, "r") as zip_file:
+                        zip_file.extractall(tmp_extraction_dir)
+                        zip_file.close()
+                else:
+                    tar_file = tarfile.open(file_path)
+                    tar_file.extractall(tmp_extraction_dir)
+                    tar_file.close()
+                # Extraction was successful, rename temp directory to final
+                # cache directory and dump the meta data.
+                os.replace(tmp_extraction_dir, extraction_path)
+                meta = _Meta(
+                    resource=url_or_filename,
+                    cached_path=extraction_path,
+                    creation_time=time.time(),
+                    extraction_dir=True,
+                    size=_get_resource_size(extraction_path),
+                )
+                meta.to_file()
+            finally:
+                shutil.rmtree(tmp_extraction_dir, ignore_errors=True)
+
+        return extraction_path
+
+    return file_path
 
 
-def _serialize(data):
-    buffer = pickle.dumps(data, protocol=-1)
-    return np.frombuffer(buffer, dtype=np.uint8)
-
-
-_active_tensor_caches: MutableMapping[int, "TensorCache"] = weakref.WeakValueDictionary()
-
-
-def _unique_file_id(path: Union[str, PathLike]) -> int:
-    result = os.stat(path).st_ino
-    assert result != 0
-    return result
-
-
-class TensorCache(MutableMapping[str, Tensor], ABC):
+def is_url_or_existing_file(url_or_filename: Union[str, Path, None]) -> bool:
     """
-    This is a key-value store, mapping strings to tensors. The data is kept on disk,
-    making this class useful as a cache for storing tensors.
+    Given something that might be a URL (or might be a local path),
+    determine check if it's url or an existing file path.
+    """
+    if url_or_filename is None:
+        return False
+    url_or_filename = os.path.expanduser(str(url_or_filename))
+    parsed = urlparse(url_or_filename)
+    return parsed.scheme in ("http", "https", "s3") or os.path.exists(url_or_filename)
 
-    `TensorCache` is also safe to access from multiple processes at the same time, so
-    you can use it in distributed training situations, or from multiple training
-    runs at the same time.
+
+def _split_s3_path(url: str) -> Tuple[str, str]:
+    """Split a full s3 path into the bucket name and path."""
+    parsed = urlparse(url)
+    if not parsed.netloc or not parsed.path:
+        raise ValueError("bad s3 path {}".format(url))
+    bucket_name = parsed.netloc
+    s3_path = parsed.path
+    # Remove '/' at beginning of path.
+    if s3_path.startswith("/"):
+        s3_path = s3_path[1:]
+    return bucket_name, s3_path
+
+
+def _s3_request(func: Callable):
+    """
+    Wrapper function for s3 requests in order to create more helpful error
+    messages.
     """
 
-    def __new__(cls, filename: Union[str, PathLike], *, read_only: bool = False, **kwargs):
-        # This mechanism makes sure we re-use open lmdb file handles. Lmdb has a problem when the same file is
-        # opened by the same process multiple times. This is our workaround.
-        filename = str(filename)
+    @wraps(func)
+    def wrapper(url: str, *args, **kwargs):
         try:
-            result = _active_tensor_caches.get(_unique_file_id(filename))
-        except FileNotFoundError:
-            result = None
-        if result is None:
-            result = super(TensorCache, cls).__new__(cls)
-        return result
+            return func(url, *args, **kwargs)
+        except ClientError as exc:
+            if int(exc.response["Error"]["Code"]) == 404:
+                raise FileNotFoundError("file {} not found".format(url))
+            else:
+                raise
+
+    return wrapper
+
+
+def _get_s3_resource():
+    session = boto3.session.Session()
+    if session.get_credentials() is None:
+        # Use unsigned requests.
+        s3_resource = session.resource(
+            "s3", config=botocore.client.Config(signature_version=botocore.UNSIGNED)
+        )
+    else:
+        s3_resource = session.resource("s3")
+    return s3_resource
+
+
+@_s3_request
+def _s3_etag(url: str) -> Optional[str]:
+    """Check ETag on S3 object."""
+    s3_resource = _get_s3_resource()
+    bucket_name, s3_path = _split_s3_path(url)
+    s3_object = s3_resource.Object(bucket_name, s3_path)
+    return s3_object.e_tag
+
+
+@_s3_request
+def _s3_get(url: str, temp_file: IO) -> None:
+    """Pull a file directly from S3."""
+    s3_resource = _get_s3_resource()
+    bucket_name, s3_path = _split_s3_path(url)
+    s3_resource.Bucket(bucket_name).download_fileobj(s3_path, temp_file)
+
+
+def _session_with_backoff() -> requests.Session:
+    """
+    We ran into an issue where http requests to s3 were timing out,
+    possibly because we were making too many requests too quickly.
+    This helper function returns a requests session that has retry-with-backoff
+    built in. See
+    <https://stackoverflow.com/questions/23267409/how-to-implement-retry-mechanism-into-python-requests-library>.
+    """
+    session = requests.Session()
+    retries = Retry(total=5, backoff_factor=1, status_forcelist=[502, 503, 504])
+    session.mount("http://", HTTPAdapter(max_retries=retries))
+    session.mount("https://", HTTPAdapter(max_retries=retries))
+
+    return session
+
+
+def _http_etag(url: str) -> Optional[str]:
+    with _session_with_backoff() as session:
+        response = session.head(url, allow_redirects=True)
+    if response.status_code != 200:
+        raise IOError(
+            "HEAD request failed for url {} with status code {}".format(url, response.status_code)
+        )
+    return response.headers.get("ETag")
+
+
+def _http_get(url: str, temp_file: IO) -> None:
+    with _session_with_backoff() as session:
+        req = session.get(url, stream=True)
+        content_length = req.headers.get("Content-Length")
+        total = int(content_length) if content_length is not None else None
+        progress = Tqdm.tqdm(unit="B", total=total, desc="downloading")
+        for chunk in req.iter_content(chunk_size=1024):
+            if chunk:  # filter out keep-alive new chunks
+                progress.update(len(chunk))
+                temp_file.write(chunk)
+        progress.close()
+
+
+def _find_latest_cached(url: str, cache_dir: Union[str, Path]) -> Optional[str]:
+    filename = _resource_to_filename(url)
+    cache_path = os.path.join(cache_dir, filename)
+    candidates: List[Tuple[str, float]] = []
+    for path in glob.glob(cache_path + "*"):
+        if path.endswith(".json") or path.endswith("-extracted") or path.endswith(".lock"):
+            continue
+        mtime = os.path.getmtime(path)
+        candidates.append((path, mtime))
+    # Sort candidates by modification time, newest first.
+    candidates.sort(key=lambda x: x[1], reverse=True)
+    if candidates:
+        return candidates[0][0]
+    return None
+
+
+class CacheFile:
+    """
+    This is a context manager that makes robust caching easier.
+
+    On `__enter__`, an IO handle to a temporarily file is returned, which can
+    be treated as if it's the actual cache file.
+
+    On `__exit__`, the temporarily file is renamed to the cache file. If anything
+    goes wrong while writing to the temporary file, it will be removed.
+    """
 
     def __init__(
-        self,
-        filename: Union[str, PathLike],
-        *,
-        map_size: int = 1024 * 1024 * 1024 * 1024,
-        read_only: bool = False,
+        self, cache_filename: Union[Path, str], mode: str = "w+b", suffix: str = ".tmp"
     ) -> None:
-        """
-        Creates a `TensorCache` by either opening an existing one on disk, or creating
-        a new one. Its interface is almost exactly like a Python dictionary, where the
-        keys are strings and the values are `torch.Tensor`.
-
-        Parameters
-        ----------
-        filename: `str`
-            Path to the location of the cache
-        map_size: `int`, optional, defaults to 1TB
-            This is the maximum size the cache will ever grow to. On reasonable operating
-            systems, there is no penalty to making this a large value.
-            `TensorCache` uses a memory-mapped file to store the data. When the file is
-            first opened, we have to give the maximum size it can ever grow to. This is
-            that number. Reasonable operating systems don't actually allocate that space
-            until it is really needed.
-        """
-        self.lmdb_env: lmdb.Environment
-        if hasattr(self, "lmdb_env"):
-            # We're being initialized again after a cache hit in _active_tensor_caches, thanks
-            # to __new__. In this case, we may have to upgrade to read/write, but other than
-            # that we are good to go.
-            if read_only:
-                return
-            if not self.read_only:
-                return
-
-            # Upgrade a read-only lmdb env to a read/write lmdb env.
-            filename = self.lmdb_env.path()
-            old_info = self.lmdb_env.info()
-
-            self.lmdb_env.close()
-            self.lmdb_env = lmdb.open(
-                filename,
-                map_size=old_info["map_size"],
-                subdir=False,
-                metasync=False,
-                sync=True,
-                readahead=False,
-                meminit=False,
-                readonly=False,
-                lock=True,
-            )
-        else:
-            filename = str(filename)
-
-            cpu_count = os.cpu_count() or 1
-            if os.path.exists(filename):
-                if os.path.isfile(filename):
-                    # If the file is not writable, set read_only to True, but issue a warning.
-                    if not os.access(filename, os.W_OK):
-                        if not read_only:
-                            warnings.warn(
-                                f"File '{filename}' is read-only, so cache will be read-only",
-                                UserWarning,
-                            )
-                        read_only = True
-                else:
-                    # If it's not a file, raise an error.
-                    raise ValueError("Expect a file, found a directory instead")
-
-            use_lock = True
-            if read_only:
-                # Check if the lock file is writable. If it's not, then we won't be able to use the lock.
-
-                # This is always how lmdb names the lock file.
-                lock_filename = filename + "-lock"
-                if os.path.isfile(lock_filename):
-                    use_lock = os.access(lock_filename, os.W_OK)
-                else:
-                    # If the lock file doesn't exist yet, then the directory needs to be writable in
-                    # order to create and use the lock file.
-                    use_lock = os.access(os.path.dirname(lock_filename), os.W_OK)
-
-            if not use_lock:
-                warnings.warn(
-                    f"Lacking permissions to use lock file on cache '{filename}'.\nUse at your own risk!",
-                    UserWarning,
-                )
-
-            self.lmdb_env = lmdb.open(
-                filename,
-                subdir=False,
-                map_size=map_size,
-                max_readers=cpu_count * 4,
-                max_spare_txns=cpu_count * 4,
-                metasync=False,
-                sync=True,
-                readahead=False,
-                meminit=False,
-                readonly=read_only,
-                lock=use_lock,
-            )
-            _active_tensor_caches[_unique_file_id(filename)] = self
-
-            # We have another cache here that makes sure we return the same object for the same key. Without it,
-            # you would get a different tensor, using different memory, every time you call __getitem__(), even
-            # if you call it with the same key.
-            # The downside is that we can't keep self.cache_cache up to date when multiple processes modify the
-            # cache at the same time. We can guarantee though that it is up to date as long as processes either
-            # write new values, or read existing ones.
-            self.cache_cache: MutableMapping[str, Tensor] = WeakValueDictionary()
-
-    @property
-    def read_only(self) -> bool:
-        return self.lmdb_env.flags()["readonly"]
-
-    def __contains__(self, key: object):
-        if not isinstance(key, str):
-            return False
-        if key in self.cache_cache:
-            return True
-        encoded_key = key.encode()
-        with self.lmdb_env.begin(write=False) as txn:
-            result = txn.get(encoded_key)
-            return result is not None
-
-    def __getitem__(self, key: str):
-        try:
-            return self.cache_cache[key]
-        except KeyError:
-            encoded_key = key.encode()
-            with self.lmdb_env.begin(write=False) as txn:
-                buffer = txn.get(encoded_key)
-                if buffer is None:
-                    raise KeyError()
-                tensor = torch.load(io.BytesIO(buffer), map_location="cpu")
-            self.cache_cache[key] = tensor
-            return tensor
-
-    def __setitem__(self, key: str, tensor: torch.Tensor):
-        if self.read_only:
-            raise ValueError("cannot write to a read-only cache")
-
-        tensor = tensor.cpu()
-        encoded_key = key.encode()
-        buffer = io.BytesIO()
-        if tensor.storage().size() != np.prod(tensor.size()):
-            tensor = tensor.clone()
-        assert tensor.storage().size() == np.prod(tensor.size())
-        torch.save(tensor.detach(), buffer, pickle_protocol=pickle.HIGHEST_PROTOCOL)
-        with self.lmdb_env.begin(write=True) as txn:
-            txn.put(encoded_key, buffer.getbuffer())
-
-        self.cache_cache[key] = tensor
-
-    def __delitem__(self, key: str):
-        if self.read_only:
-            raise ValueError("cannot write to a read-only cache")
-
-        encoded_key = key.encode()
-        with self.lmdb_env.begin(write=True) as txn:
-            txn.delete(encoded_key)
-
-        try:
-            del self.cache_cache[key]
-        except KeyError:
-            pass
-
-    def __del__(self):
-        if self.lmdb_env is not None:
-            self.lmdb_env.close()
-            self.lmdb_env = None
-
-    def __len__(self):
-        return self.lmdb_env.stat()["entries"]
-
-    def __iter__(self):
-        # It is not hard to implement this, but we have not needed it so far.
-        raise NotImplementedError()
-
-
-class LocalCacheResource:
-    """
-    This is a context manager that can be used to fetch and cache arbitrary resources locally
-    using the same mechanisms that `cached_path` uses for remote resources.
-
-    It can be used, for example, when you want to cache the result of an expensive computation.
-
-    # Examples
-
-    ```python
-    with LocalCacheResource("long-computation", "v1") as cache:
-        if cache.cached():
-            with cache.reader() as f:
-                # read from cache
-        else:
-            with cache.writer() as f:
-                # do the computation
-                # ...
-                # write to cache
-    ```
-    """
-
-    def __init__(self, resource_name: str, version: str, cache_dir: str = CACHE_DIRECTORY) -> None:
-        self.resource_name = resource_name
-        self.version = version
-        self.cache_dir = cache_dir
-        self.path = os.path.join(self.cache_dir, _resource_to_filename(resource_name, version))
-        self.file_lock = FileLock(self.path + ".lock")
-
-    def cached(self) -> bool:
-        return os.path.exists(self.path)
-
-    @contextmanager
-    def writer(self, mode="w"):
-        if self.cached():
-            raise ValueError(
-                f"local cache of {self.resource_name} (version '{self.version}') already exists!"
-            )
-
-        with CacheFile(self.path, mode=mode) as f:
-            yield f
-
-        meta = _Meta(
-            resource=self.resource_name,
-            cached_path=self.path,
-            creation_time=time.time(),
-            etag=self.version,
-            size=_get_resource_size(self.path),
+        self.cache_filename = (
+            cache_filename if isinstance(cache_filename, Path) else Path(cache_filename)
         )
-        meta.to_file()
-
-    @contextmanager
-    def reader(self, mode="r"):
-        if not self.cached():
-            raise ValueError(
-                f"local cache of {self.resource_name} (version '{self.version}') does not exist yet!"
-            )
-
-        with open(self.path, mode) as f:
-            yield f
+        self.cache_directory = os.path.dirname(self.cache_filename)
+        self.mode = mode
+        self.temp_file = tempfile.NamedTemporaryFile(
+            self.mode, dir=self.cache_directory, delete=False, suffix=suffix
+        )
 
     def __enter__(self):
-        self.file_lock.acquire()
-        return self
+        return self.temp_file
 
     def __exit__(self, exc_type, exc_value, traceback):
-        self.file_lock.release()
+        self.temp_file.close()
         if exc_value is None:
+            # Success.
+            logger.debug(
+                "Renaming temp file %s to cache at %s", self.temp_file.name, self.cache_filename
+            )
+            # Rename the temp file to the actual cache filename.
+            os.replace(self.temp_file.name, self.cache_filename)
             return True
+        # Something went wrong, remove the temp file.
+        logger.debug("removing temp file %s", self.temp_file.name)
+        os.remove(self.temp_file.name)
         return False
+
+
+@dataclass
+class _Meta:
+    """
+    Any resource that is downloaded to - or extracted in - the cache directory will
+    have a meta JSON file written next to it, which corresponds to an instance
+    of this class.
+
+    In older versions of AllenNLP, this meta document just had two fields: 'url' and
+    'etag'. The 'url' field is now the more general 'resource' field, but these old
+    meta files are still compatible when a `_Meta` is instantiated with the `.from_path()`
+    class method.
+    """
+
+    resource: str
+    """
+    URL or normalized path to the resource.
+    """
+
+    cached_path: str
+    """
+    Path to the corresponding cached version of the resource.
+    """
+
+    creation_time: float
+    """
+    The unix timestamp of when the corresponding resource was cached or extracted.
+    """
+
+    size: int = 0
+    """
+    The size of the corresponding resource, in bytes.
+    """
+
+    etag: Optional[str] = None
+    """
+    Optional ETag associated with the current cached version of the resource.
+    """
+
+    extraction_dir: bool = False
+    """
+    Does this meta corresponded to an extraction directory?
+    """
+
+    def to_file(self) -> None:
+        with open(self.cached_path + ".json", "w") as meta_file:
+            json.dump(asdict(self), meta_file)
+
+    @classmethod
+    def from_path(cls, path: Union[str, Path]) -> "_Meta":
+        path = str(path)
+        with open(path) as meta_file:
+            data = json.load(meta_file)
+            # For backwards compat:
+            if "resource" not in data:
+                data["resource"] = data.pop("url")
+            if "creation_time" not in data:
+                data["creation_time"] = os.path.getmtime(path[:-5])
+            if "extraction_dir" not in data and path.endswith("-extracted.json"):
+                data["extraction_dir"] = True
+            if "cached_path" not in data:
+                data["cached_path"] = path[:-5]
+            if "size" not in data:
+                data["size"] = _get_resource_size(data["cached_path"])
+        return cls(**data)
+
+
+# TODO(joelgrus): do we want to do checksums or anything like that?
+def get_from_cache(url: str, cache_dir: Union[str, Path] = None) -> str:
+    """
+    Given a URL, look for the corresponding dataset in the local cache.
+    If it's not there, download it. Then return the path to the cached file.
+    """
+    if cache_dir is None:
+        cache_dir = CACHE_DIRECTORY
+
+    # Get eTag to add to filename, if it exists.
+    try:
+        if url.startswith("s3://"):
+            etag = _s3_etag(url)
+        else:
+            etag = _http_etag(url)
+    except (ConnectionError, EndpointConnectionError):
+        # We might be offline, in which case we don't want to throw an error
+        # just yet. Instead, we'll try to use the latest cached version of the
+        # target resource, if it exists. We'll only throw an exception if we
+        # haven't cached the resource at all yet.
+        logger.warning(
+            "Connection error occurred while trying to fetch ETag for %s. "
+            "Will attempt to use latest cached version of resource",
+            url,
+        )
+        latest_cached = _find_latest_cached(url, cache_dir)
+        if latest_cached:
+            logger.info(
+                "ETag request failed with connection error, using latest cached "
+                "version of %s: %s",
+                url,
+                latest_cached,
+            )
+            return latest_cached
+        else:
+            logger.error(
+                "Connection failed while trying to fetch ETag, "
+                "and no cached version of %s could be found",
+                url,
+            )
+            raise
+    except OSError:
+        # OSError may be triggered if we were unable to fetch the eTag.
+        # If this is the case, try to proceed without eTag check.
+        etag = None
+
+    filename = _resource_to_filename(url, etag)
+
+    # Get cache path to put the file.
+    cache_path = os.path.join(cache_dir, filename)
+
+    # Multiple processes may be trying to cache the same file at once, so we need
+    # to be a little careful to avoid race conditions. We do this using a lock file.
+    # Only one process can own this lock file at a time, and a process will block
+    # on the call to `lock.acquire()` until the process currently holding the lock
+    # releases it.
+    logger.debug("waiting to acquire lock on %s", cache_path)
+    with FileLock(cache_path + ".lock"):
+        if os.path.exists(cache_path):
+            logger.info("cache of %s is up-to-date", url)
+        else:
+            with CacheFile(cache_path) as cache_file:
+                logger.info("%s not found in cache, downloading to %s", url, cache_path)
+
+                # GET file object
+                if url.startswith("s3://"):
+                    _s3_get(url, cache_file)
+                else:
+                    _http_get(url, cache_file)
+
+            logger.debug("creating metadata file for %s", cache_path)
+            meta = _Meta(
+                resource=url,
+                cached_path=cache_path,
+                creation_time=time.time(),
+                etag=etag,
+                size=_get_resource_size(cache_path),
+            )
+            meta.to_file()
+
+    return cache_path
 
 
 def read_set_from_file(filename: str) -> Set[str]:
@@ -445,35 +584,25 @@ def get_file_extension(path: str, dot=True, lower: bool = True):
     return ext.lower() if lower else ext
 
 
-_SUFFIXES: Dict[Callable, str] = {
-    open: "",
-    gzip.open: ".gz",
-    bz2.open: ".bz2",
-    lzma.open: ".xz",
-}
-
-
 def open_compressed(
-    filename: Union[str, PathLike],
-    mode: str = "rt",
-    encoding: Optional[str] = "UTF-8",
-    **kwargs,
+    filename: Union[str, Path], mode: str = "rt", encoding: Optional[str] = "UTF-8", **kwargs
 ):
-    if not isinstance(filename, str):
+    if isinstance(filename, Path):
         filename = str(filename)
+    open_fn: Callable = open
 
-    open_fn: Callable
-    filename = str(filename)
-    for open_fn, suffix in _SUFFIXES.items():
-        if len(suffix) > 0 and filename.endswith(suffix):
-            break
-    else:
-        open_fn = open
+    if filename.endswith(".gz"):
+        import gzip
 
-    return open_fn(cached_path(filename), mode=mode, encoding=encoding, **kwargs)
+        open_fn = gzip.open
+    elif filename.endswith(".bz2"):
+        import bz2
+
+        open_fn = bz2.open
+    return open_fn(filename, mode=mode, encoding=encoding, **kwargs)
 
 
-def text_lines_from_file(filename: Union[str, PathLike], strip_lines: bool = True) -> Iterator[str]:
+def text_lines_from_file(filename: Union[str, Path], strip_lines: bool = True) -> Iterator[str]:
     with open_compressed(filename, "rt", encoding="UTF-8", errors="replace") as p:
         if strip_lines:
             for line in p:
@@ -482,7 +611,7 @@ def text_lines_from_file(filename: Union[str, PathLike], strip_lines: bool = Tru
             yield from p
 
 
-def json_lines_from_file(filename: Union[str, PathLike]) -> Iterable[Union[list, dict]]:
+def json_lines_from_file(filename: Union[str, Path]) -> Iterable[Union[list, dict]]:
     return (json.loads(line) for line in text_lines_from_file(filename))
 
 
@@ -611,13 +740,3 @@ def inspect_cache(patterns: List[str] = None, cache_dir: Union[str, Path] = None
                 f"latest {format_size(size)} from {format_timedelta(td)} ago"
             )
     print(f"\nTotal size: {format_size(total_size)}")
-
-
-def hardlink_or_copy(source: PathOrStr, dest: PathOrStr):
-    try:
-        os.link(source, dest)
-    except OSError as e:
-        if e.errno in {18, 95}:  # Cross-device link and Windows
-            shutil.copy(source, dest)
-        else:
-            raise

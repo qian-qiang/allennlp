@@ -1,2 +1,0 @@
-from allennlp.nn.checkpoint.checkpoint_wrapper import CheckpointWrapper, TorchCheckpointWrapper
-from allennlp.nn.checkpoint.fairscale_checkpoint_wrapper import FairScaleCheckpointWrapper

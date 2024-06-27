@@ -8,13 +8,7 @@ from allennlp.common.testing import AllenNlpTestCase
 
 class TestCachedPathCommand(AllenNlpTestCase):
     def test_local_file(self, capsys):
-        sys.argv = [
-            "allennlp",
-            "cached-path",
-            "--cache-dir",
-            str(self.TEST_DIR),
-            str(self.PROJECT_ROOT_FALLBACK / "README.md"),
-        ]
+        sys.argv = ["allennlp", "cached-path", "--cache-dir", str(self.TEST_DIR), "README.md"]
         main()
         captured = capsys.readouterr()
         assert "README.md" in captured.out

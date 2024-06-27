@@ -1,11 +1,11 @@
 from typing import List, Optional
 
-
+from overrides import overrides
 import spacy
 from spacy.tokens import Doc
 
 from allennlp.common.util import get_spacy_model
-from allennlp.data.tokenizers.token_class import Token
+from allennlp.data.tokenizers.token import Token
 from allennlp.data.tokenizers.tokenizer import Tokenizer
 
 
@@ -52,7 +52,7 @@ class SpacyTokenizer(Tokenizer):
     def __init__(
         self,
         language: str = "en_core_web_sm",
-        pos_tags: bool = True,
+        pos_tags: bool = False,
         parse: bool = False,
         ner: bool = False,
         keep_spacy_tokens: bool = False,
@@ -60,16 +60,8 @@ class SpacyTokenizer(Tokenizer):
         start_tokens: Optional[List[str]] = None,
         end_tokens: Optional[List[str]] = None,
     ) -> None:
-        # Save these for use later in the _to_params method
-        self._language = language
-        self._pos_tags = pos_tags
-        self._parse = parse
-        self._ner = ner
-        self._split_on_spaces = split_on_spaces
-
-        self.spacy = get_spacy_model(self._language, self._pos_tags, self._parse, self._ner)
-
-        if self._split_on_spaces:
+        self.spacy = get_spacy_model(language, pos_tags, parse, ner)
+        if split_on_spaces:
             self.spacy.tokenizer = _WhitespaceSpacyTokenizer(self.spacy.vocab)
 
         self._keep_spacy_tokens = keep_spacy_tokens
@@ -77,7 +69,6 @@ class SpacyTokenizer(Tokenizer):
         # We reverse the tokens here because we're going to insert them with `insert(0)` later;
         # this makes sure they show up in the right order.
         self._start_tokens.reverse()
-        self._is_version_3 = spacy.__version__ >= "3.0"
         self._end_tokens = end_tokens or []
 
     def _sanitize(self, tokens: List[spacy.tokens.Token]) -> List[Token]:
@@ -105,34 +96,17 @@ class SpacyTokenizer(Tokenizer):
             tokens.append(Token(end_token, -1))
         return tokens
 
+    @overrides
     def batch_tokenize(self, texts: List[str]) -> List[List[Token]]:
-        if self._is_version_3:
-            return [
-                self._sanitize(_remove_spaces(tokens))
-                for tokens in self.spacy.pipe(texts, n_process=-1)
-            ]
-        else:
-            return [
-                self._sanitize(_remove_spaces(tokens))
-                for tokens in self.spacy.pipe(texts, n_threads=-1)
-            ]
+        return [
+            self._sanitize(_remove_spaces(tokens))
+            for tokens in self.spacy.pipe(texts, n_threads=-1)
+        ]
 
+    @overrides
     def tokenize(self, text: str) -> List[Token]:
         # This works because our Token class matches spacy's.
         return self._sanitize(_remove_spaces(self.spacy(text)))
-
-    def _to_params(self):
-        return {
-            "type": "spacy",
-            "language": self._language,
-            "pos_tags": self._pos_tags,
-            "parse": self._parse,
-            "ner": self._ner,
-            "keep_spacy_tokens": self._keep_spacy_tokens,
-            "split_on_spaces": self._split_on_spaces,
-            "start_tokens": self._start_tokens,
-            "end_tokens": self._end_tokens,
-        }
 
 
 class _WhitespaceSpacyTokenizer:

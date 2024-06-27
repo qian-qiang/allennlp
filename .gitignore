@@ -44,7 +44,6 @@ __pycache__
 
 .coverage
 .pytest_cache/
-.benchmarks
 
 # documentation build artifacts
 

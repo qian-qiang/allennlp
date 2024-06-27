@@ -1,7 +1,5 @@
 from typing import Iterable, List
 
-import pytest
-
 from allennlp.common import Params
 from allennlp.common.testing import AllenNlpTestCase
 from allennlp.data import Token
@@ -329,34 +327,3 @@ class TestPretrainedTransformerTokenizer(AllenNlpTestCase):
         PretrainedTransformerTokenizer.from_params(
             Params({"model_name": "bert-base-uncased", "tokenizer_kwargs": {"max_len": 10}})
         )
-
-    def test_to_params(self):
-        tokenizer = PretrainedTransformerTokenizer.from_params(
-            Params({"model_name": "bert-base-uncased", "tokenizer_kwargs": {"max_len": 10}})
-        )
-        params = tokenizer.to_params()
-        assert isinstance(params, Params)
-        assert params.params == {
-            "type": "pretrained_transformer",
-            "model_name": "bert-base-uncased",
-            "add_special_tokens": True,
-            "max_length": None,
-            "tokenizer_kwargs": {"max_len": 10, "use_fast": True},
-        }
-
-    def test_initialize_tokenizer_with_verification_tokens(self):
-        model_name = "roberta-base"
-        PretrainedTransformerTokenizer(
-            model_name,
-            verification_tokens=("cat", "dog"),
-        )
-        with pytest.raises(AssertionError):
-            PretrainedTransformerTokenizer(
-                model_name,
-                verification_tokens=("unknowntoken", "dog"),
-            )
-        with pytest.raises(AssertionError):
-            PretrainedTransformerTokenizer(
-                model_name,
-                verification_tokens=("cat", "cat"),
-            )

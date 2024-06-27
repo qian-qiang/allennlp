@@ -1,5 +1,6 @@
 from typing import Optional, Dict, Any
 
+from overrides import overrides
 
 import torch
 import torch.nn
@@ -25,15 +26,7 @@ class BertPooler(Seq2VecEncoder):
         The pretrained BERT model to use. If this is a string,
         we will call `transformers.AutoModel.from_pretrained(pretrained_model)`
         and use that.
-    override_weights_file: `Optional[str]`, optional (default = `None`)
-        If set, this specifies a file from which to load alternate weights that override the
-        weights from huggingface. The file is expected to contain a PyTorch `state_dict`, created
-        with `torch.save()`.
-    override_weights_strip_prefix: `Optional[str]`, optional (default = `None`)
-        If set, strip the given prefix from the state dict when loading it.
-    load_weights: `bool`, optional (default = `True`)
-        Whether to load the pretraiend weights.
-    requires_grad : `bool`, optional (default = `True`)
+    requires_grad : `bool`, optional, (default = `True`)
         If True, the weights of the pooler will be updated during training.
         Otherwise they will not.
     dropout : `float`, optional, (default = `0.0`)
@@ -50,7 +43,6 @@ class BertPooler(Seq2VecEncoder):
         *,
         override_weights_file: Optional[str] = None,
         override_weights_strip_prefix: Optional[str] = None,
-        load_weights: bool = True,
         requires_grad: bool = True,
         dropout: float = 0.0,
         transformer_kwargs: Optional[Dict[str, Any]] = None,
@@ -62,9 +54,8 @@ class BertPooler(Seq2VecEncoder):
         model = cached_transformers.get(
             pretrained_model,
             False,
-            override_weights_file=override_weights_file,
-            override_weights_strip_prefix=override_weights_strip_prefix,
-            load_weights=load_weights,
+            override_weights_file,
+            override_weights_strip_prefix,
             **(transformer_kwargs or {}),
         )
 
@@ -77,9 +68,11 @@ class BertPooler(Seq2VecEncoder):
             param.requires_grad = requires_grad
         self._embedding_dim = model.config.hidden_size
 
+    @overrides
     def get_input_dim(self) -> int:
         return self._embedding_dim
 
+    @overrides
     def get_output_dim(self) -> int:
         return self._embedding_dim
 

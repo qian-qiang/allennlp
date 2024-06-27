@@ -3,7 +3,8 @@ import pytest
 
 from allennlp.common.testing import AllenNlpTestCase
 from allennlp.data.dataset_readers.dataset_utils import span_utils
-from allennlp.data.tokenizers import Token, SpacyTokenizer
+from allennlp.data.tokenizers.spacy_tokenizer import SpacyTokenizer
+from allennlp.data.tokenizers.token import Token
 
 
 class SpanUtilsTest(AllenNlpTestCase):
@@ -129,7 +130,7 @@ class SpanUtilsTest(AllenNlpTestCase):
         }
 
     def test_enumerate_spans_enumerates_all_spans(self):
-        tokenizer = SpacyTokenizer()
+        tokenizer = SpacyTokenizer(pos_tags=True)
         sentence = tokenizer.tokenize("This is a sentence.")
 
         spans = span_utils.enumerate_spans(sentence)
